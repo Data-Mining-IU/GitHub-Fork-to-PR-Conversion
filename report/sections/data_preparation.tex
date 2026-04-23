@@ -1,0 +1,78 @@
+\section{Data Preparation}
+
+The data preparation phase covers all activities to construct the final dataset for modeling from the initial raw data. 
+
+\subsection{Select Data}
+
+\subsubsection{Data Selection During Extraction}
+
+Selection during extraction already fixed the GitHub Archive schema: retained fields include repository and actor identifiers, event type and time, repository URL, visibility flag, and derived season; heavy or redundant fields (for example payload and most nested metadata) were excluded at extraction time. Event types used for features and targets include ForkEvent, PullRequestEvent, WatchEvent, PushEvent, IssuesEvent, IssueCommentEvent, and ReleaseEvent, with seasonal windows and repository filters as documented in the earlier report.
+
+\subsubsection{Data Selection During EDA}
+
+The public field exhibits no useful variation in this sample and is removed from the modeling copy of the activity table.
+The \texttt{repo\_url} field is removed from the modeling copy because it is not used as a predictive feature in the current design (it can be rejoined externally if static metadata is added later).
+No repository–season rows are dropped at this step: the sampled keys from BigQuery are preserved; alignment with labels is enforced later with an inner join.
+In code, a copy \texttt{prep\_activity} is built from activity after dropping public and \texttt{repo\_url}, leaving identifiers \texttt{repo\_name} and season plus the five activity counters (watches, pushes, issues, issue comments, releases).
+
+
+\subsection{Clean Data}
+
+Extreme values on activity metrics were documented as legitimate heavy tails rather than automatic data errors. The cleaning strategy is therefore tail reduction, not row deletion.
+
+For each of the five activity counters, values are winsorized at the 99th percentile (\texttt{WINSOR\_Q = 0.99}).
+Original columns are retained; capped values are stored in *\_winsor columns.
+Before quantiles and clipping, series are cast to float64 so nullable integer dtypes from Parquet do not conflict with fractional quantile thresholds.
+Fork and PR event lists used for labels are not winsorized; labeling uses raw events and timestamps.
+This balances numerical stability for modeling with preservation of the full sample and of event-level detail for the label logic.
+
+\subsection{Construct Data}
+
+
+\subsubsection{Sampling Strategy}
+The unit of analysis is one repository in one season. Each row in the integrated table corresponds to that pair. The sample size and inclusion rules follow the extraction query (e.g. the 100,000-row cap and filters applied in the warehouse). This phase does not subsample rows for class balance or stratification; the exported table is the full set of repository–season observations that pass the merge and labeling logic.
+
+\subsubsection{Matching Forks to Pull Requests}
+
+A fork counts as converted if there is at least one pull request whose \texttt{user\_login} matches the fork author, whose timestamp is strictly after the fork, and which occurs within \texttt{OBSERVATION\_DAYS} days after the fork (default 90 in the implementation). Events on or before the fork, or after the window, are ignored for conversion. Per repository and season the notebook computes \texttt{n\_forks}, \texttt{n\_converted\_forks}, \texttt{fork\_conversion\_rate} (converted forks divided by fork count, not total PR events divided by forks without matching), and \texttt{n\_pr\_events} as a count of PR events in the cell.
+
+
+\subsubsection{Derived Features}
+
+For each activity counter, log1p is applied to both the raw values and the winsorized (\texttt{*\_winsor}) versions, giving log1p\_* columns suited to skewed nonnegative counts. Original counts and winsorized columns remain in the table alongside these transforms.
+
+\subsubsection{Generated Records}
+
+Each generated record is one flat row for a repository–season pair:
+
+Only fork–PR pairs that satisfy the matching rules and fall inside the observation window increase \texttt{n\_converted\_forks} and \texttt{fork\_conversion\_rate}.
+The export stores scalars only; nested fork/PR lists are not written to the flat file.
+Rows are kept when there are no qualifying PRs: \texttt{n\_converted\_forks} may be zero; such rows are not removed from the dataset.
+
+
+
+
+
+\subsection{Integrate Data}
+
+The activity table (identifiers, activity counters, winsorized and log-transformed fields as built in the preparation pipeline) is joined to the per-repository–season label table on \texttt{repo\_name} and season. The join is an inner merge with one-to-one key validation so each key appears at most once on both sides. The result is a single wide table with one row per repository and season, combining all feature columns with n\_forks, n\_converted\_forks, fork\_conversion\_rate, n\_pr\_events, and any other label fields produced in the construction step.
+
+
+\subsection{Format Data}
+
+The merged table is ordered and typed for stable export and downstream use.
+
+
+\begin{itemize}
+    \item \texttt{repo\_id}: integer codes for \texttt{repo\_name}; \texttt{repo\_name} is kept for interpretation.
+    \item \texttt{has\_conversion}: binary flag, true when \texttt{n\_converted\_forks > 0}.
+    \item Column order: identifiers and season, then log1p\_* feature columns, then label columns (n\_forks, n\_converted\_forks, fork\_conversion\_rate, n\_pr\_events, has\_conversion), then any remaining columns (e.g. raw counts and \texttt{*\_winsor}).
+    \item Shuffle: rows are permuted with a fixed random seed for reproducibility.
+    \item Output: primary file \texttt{modeling\_dataset.parquet} when a Parquet engine is available; otherwise \texttt{modeling\_dataset.csv}.
+\end{itemize}
+
+The file is row-complete for all keys that survive the inner join; missing-engine fallbacks only affect storage format, not the tabular content.
+
+
+
+

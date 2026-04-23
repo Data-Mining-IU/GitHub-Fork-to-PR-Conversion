@@ -1,0 +1,428 @@
+\section{Data Understanding}
+\subsection{Collect Initial Data}
+
+The initial data for this project was obtained from the public GitHub Archive dataset available in Google BigQuery. This dataset contains a continuous stream of GitHub activity events (e.g., forks, pull requests, pushes, and issues) and is updated hourly.
+
+\subsubsection{Data Sources and Access}
+
+\begin{itemize}
+    \item \textbf{Source:} GitHub Archive (public dataset in BigQuery)
+    \item \textbf{Access method:} SQL queries executed via Google BigQuery
+    \item \textbf{Storage:}
+    \begin{itemize}
+        \item Final datasets were directly constructed in BigQuery
+        \item Exported to Google Colab in \texttt{.parquet} format:
+        \begin{itemize}
+            \item \texttt{activity\_sample.parquet}
+            \item \texttt{fork\_pr\_sample.parquet}
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Data Acquisition Process}
+
+The data collection process was implemented as a single-stage sampling pipeline directly on top of the raw GitHub Archive tables.
+
+\begin{enumerate}
+    \item Extraction of event data from BigQuery for the year 2025
+    \item Filtering of relevant event types:
+    \begin{itemize}
+        \item ForkEvent
+        \item PullRequestEvent
+        \item WatchEvent
+        \item PushEvent
+        \item IssuesEvent
+        \item IssueCommentEvent
+        \item ReleaseEvent
+    \end{itemize}
+    \item Construction of a sampled activity dataset (\texttt{activity\_sample}), where:
+    \begin{itemize}
+        \item repository-level activity metrics are aggregated
+        \item repositories are filtered by minimum fork activity
+        \item only active repositories (at least one interaction signal) are retained
+        \item a random sample of repositories is selected
+    \end{itemize}
+    \item Construction of a fork and pull request dataset (\texttt{fork\_pr\_sample}) using the same set of repositories to ensure consistency between features and target variables
+\end{enumerate}
+
+\subsubsection{Key Design Decisions}
+
+Several important design decisions were made to balance analytical goals and computational constraints:
+
+\begin{itemize}
+    \item \textbf{Anchor periods:} Fork events are restricted to two 3-month windows (January–March and July–September), which define the reference periods for analysis
+    
+    \item \textbf{Observation window:} Pull request events are collected over extended seasonal windows (January–June and July–December) to allow for delayed contributions after forks
+    
+    \item \textbf{Minimum fork threshold:} Only repositories with more than 5 forks within the anchor period are retained to reduce noise from low-activity repositories
+    
+    \item \textbf{Activity filtering:} Repositories must exhibit at least one interaction signal (watches, pushes, issues, issue comments, or releases)
+    
+    \item \textbf{Sampling strategy:} A random sample of repositories is drawn after filtering to reduce data volume while preserving diversity
+    
+    \item \textbf{Seasonality handling:} Two distinct seasonal periods (winter–spring and summer–autumn) are used to reduce temporal bias and capture variation in developer activity
+\end{itemize}
+
+\subsubsection{Problems Encountered and Solutions}
+
+\begin{itemize}
+    \item \textbf{Large data volume:} The GitHub Archive dataset is extremely large (tens of gigabytes for a single year). This was addressed by applying early filtering and sampling directly in BigQuery queries, avoiding materialization of full raw datasets.
+    
+    \item \textbf{Storage limitations:} The BigQuery sandbox imposes strict storage limits. This was mitigated by constructing sampled datasets directly, instead of storing intermediate full-scale tables.
+    
+    \item \textbf{High cost of payload field:} The \texttt{payload} field significantly increases data size [Figure 1]. It was excluded, and only structured fields (e.g., \texttt{repo.name}, \texttt{actor.login}) were used.
+    
+    \item \textbf{Sampling bias:} GitHub data is highly skewed toward popular repositories. This was mitigated by applying a minimum activity threshold and random sampling after filtering.
+    
+    \item \textbf{Temporal drift and seasonality:} Developer activity varies over time. This was addressed by explicitly defining two seasonal periods and aligning all features and targets with these periods.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{query_with_payload.png}
+    \caption{Influence of including the payload field on query size}
+    \label{fig:payload}
+\end{figure}
+
+\subsubsection{Outcome}
+
+As a result of the data collection process, two main datasets were prepared:
+
+\begin{itemize}
+    \item \textbf{activity\_sample:} repository-level activity metrics, including watches, pushes, issues, issue comments, and releases
+    
+    \item \textbf{fork\_pr\_sample:} structured arrays of fork and pull request events with user identifiers and timestamps, aligned with the sampled repositories and seasonal periods
+\end{itemize}
+
+These datasets form the basis for subsequent data understanding, exploration, and preparation stages.
+
+
+
+\subsection{Describe Data}
+
+In this stage, the acquired datasets are examined at a surface level in order to understand their structure, size, and general properties. The goal is to assess whether the collected data is suitable for further analysis and modeling.
+
+\subsubsection{Data Format and Structure}
+
+Both datasets obtained during the data collection stage are stored in \texttt{.parquet} format and loaded into a tabular structure using pandas DataFrames. Each dataset represents repository-level observations, with rows corresponding to repository-season pairs.
+
+The \texttt{activity\_sample} dataset contains aggregated numerical metrics describing repository activity, while the \texttt{fork\_pr\_sample} dataset contains nested structures representing lists of events (forks and pull requests) for each repository.
+
+The data types of the columns reflect this difference. In the activity dataset, numerical columns such as \texttt{watches}, \texttt{pushes}, \texttt{issues}, \texttt{issue\_comments}, and \texttt{releases} are stored as integer types, while identifiers such as \texttt{repo\_name} and \texttt{season} are stored as strings. In contrast, the fork/PR dataset stores event data in object-type columns, as they contain structured arrays of user and timestamp information.
+
+\subsubsection{Data Size and Dimensions}
+
+Both datasets contain 100,000 rows, corresponding to the sampled repository-season combinations.
+
+The activity dataset [Figure 2] contains 9 columns:
+\begin{itemize}
+    \item repo\_name
+    \item season
+    \item repo\_url
+    \item public
+    \item watches
+    \item pushes
+    \item issues
+    \item issue\_comments
+    \item releases
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\linewidth]{activity_table.png}
+    \caption{Head of activity table}
+    \label{fig:activity}
+\end{figure}
+
+The fork/PR dataset [Figure 3] contains 4 columns:
+\begin{itemize}
+    \item repo\_name
+    \item season
+    \item forks
+    \item prs
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\linewidth]{fork_pr_table.png}
+    \caption{Head of fork\_pr table}
+    \label{fig:placeholder}
+\end{figure}
+
+The memory footprint of the datasets is relatively small:
+\begin{itemize}
+    \item Activity dataset: approximately 29 MB
+    \item Fork/PR dataset: approximately 40 MB
+\end{itemize}
+
+This confirms that the data has been successfully reduced from the original large-scale source to a manageable size suitable for local analysis.
+
+
+\subsubsection{Field Description}
+
+The \texttt{activity\_sample} dataset includes the following types of variables:
+
+\begin{itemize}
+    \item \textbf{Identifiers:} repo\_name, season
+    \item \textbf{Metadata:} repo\_url, public
+    \item \textbf{Activity metrics:} watches, pushes, issues, issue\_comments, releases
+\end{itemize}
+
+The \texttt{fork\_pr\_sample} dataset includes:
+
+\begin{itemize}
+    \item \textbf{Identifiers:} repo\_name, season
+    \item \textbf{Event structures:}
+    \begin{itemize}
+        \item forks: list of fork events (user identifier and timestamp)
+        \item prs: list of pull request events (user identifier and timestamp)
+    \end{itemize}
+\end{itemize}
+
+Thus, the datasets complement each other: one provides aggregated activity signals, while the other preserves detailed event-level information required for modeling contribution dynamics.
+
+\subsubsection{Initial Assessment}
+
+Overall, the acquired data satisfies the requirements for further analysis. The datasets are well-structured, compact, and contain both aggregated activity signals and detailed event-level information necessary for analyzing the relationship between repository activity and contribution behavior.
+
+
+
+\subsection{Explore Data}
+
+At this stage, exploratory data analysis was conducted to understand the distribution of key variables, relationships between features, and behavioral patterns relevant to the project objectives. The focus was placed on identifying signals that may influence the likelihood of fork-to-pull-request conversion.
+
+\subsubsection{Distribution of Activity Metrics}
+
+The distributions of repository activity metrics (\texttt{watches}, \texttt{pushes}, \texttt{issues}, \texttt{issue\_comments}, \texttt{releases}) reveal a highly skewed structure over the $100{,}000$ repository--season rows in the activity table. Summary statistics (e.g.\ \texttt{describe()}) show means far above medians, as expected under heavy tails---for \texttt{watches} alone, the mean is $120.7$ while the $50$th percentile is $27$.
+
+While median values remain relatively low, the maximum values are extremely large, indicating the presence of a small number of highly active repositories dominating the distribution. Per-metric medians are $27$, $4$, $1$, $2$, and $0$ (for the five fields in the same order), whereas maxima are $79{,}049$, $340{,}799$, $48{,}592$, $199{,}042$, and $2{,}143$.
+
+Outlier analysis confirms the existence of extreme repositories with disproportionately high activity across all metrics: $1{,}476$ records ($1.5\%$ of the sample) pass the EDA high-activity rule (combined thresholds on \texttt{watches}, \texttt{pushes}, \texttt{issues}, \texttt{issue\_comments}, and \texttt{releases}). This heavy right-skew is consistent across all activity features.
+
+\textbf{Implication:} Logarithmic transformation or other scaling techniques will be required to stabilize variance and make patterns more detectable for modeling.
+
+\subsubsection{Seasonality Analysis}
+
+The dataset includes two seasonal segments: \texttt{winter\_spring} (January–March) and \texttt{summer\_autumn} (July–September).
+
+The distribution across seasons is moderately imbalanced, but median activity values remain relatively consistent between the two periods across all metrics.
+
+\textbf{Implication:} Seasonality does not significantly affect typical repository behavior, allowing both periods to be used jointly in modeling.
+
+\subsubsection{Public vs Private Repositories}
+
+All repositories in the dataset are marked as public.
+
+\textbf{Implication:} The \texttt{public} attribute does not provide useful variation and can be excluded from the modeling stage.
+
+\subsubsection{Fork and Pull Request Distributions}
+
+The fork and pull request counts also exhibit strong skewness.
+
+A substantial proportion of repositories receive forks but no pull requests:
+\begin{itemize}
+    \item Approximately 34\% of repositories have zero pull requests despite having forks
+\end{itemize}
+
+\textbf{Implication:} Conversion from fork to pull request is not guaranteed and represents a meaningful and non-trivial prediction target.
+
+\subsubsection{Repeated User Activity}
+
+Analysis of user behavior shows that most users fork a repository only once. However, pull request activity is significantly more intensive.
+
+Repositories frequently contain users submitting multiple pull requests, indicating that contribution behavior is concentrated among a smaller number of highly active contributors.
+
+\textbf{Implication:} Contribution dynamics are driven more by engaged contributors than by the number of casual users.
+
+\subsubsection{Relationship Between Activity and Contributions}
+
+Correlation analysis between activity features shows generally weak linear relationships[Figure 4]:
+
+\begin{itemize}
+    \item The strongest correlations are observed between interaction-based metrics (e.g., issues and issue comments)
+    \item Popularity metrics such as watches show very weak correlation with other features
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.3\linewidth]{pr_per_fork_cor.png}
+    \caption{Correlation with target}
+    \label{fig:placeholder}
+\end{figure}
+
+Further analysis of the relationship between activity and contribution outcomes shows:
+
+\begin{itemize}
+    \item \texttt{issue\_comments} has the strongest positive association with conversion behavior
+    \item \texttt{pushes}, \texttt{releases} and \texttt{issues} show weaker but still positive relationships
+    \item \texttt{watches} (repository popularity) shows near-zero correlation with contribution outcomes
+\end{itemize}
+
+
+
+\textbf{Implication:} Interaction-based signals are more informative for predicting contributions than popularity-based metrics.
+
+\subsubsection{Log-Scale Analysis}
+
+Due to the strong skewness of the data, relationships were additionally analyzed in log scale.
+
+Log-transformed scatter plots [Figure 5] reveal clear non-linear relationships between activity metrics and fork behavior.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{act_pr_log.png}
+    \caption{Activity vs PRs (log scale)}
+    \label{fig:act_pr_log}
+\end{figure}
+
+\textbf{Implication:} Modeling approaches should account for non-linearity, either through transformations or non-linear models.
+
+\subsubsection{Derived Metric: PR per Fork}
+
+A derived metric was introduced to estimate repository-level conversion intensity:
+
+\begin{center}
+PR per Fork = $\frac{\text{PR count}}{\text{Fork count} }$
+\end{center}
+
+The distribution of this metric is highly skewed:
+
+\begin{itemize}
+    \item Median is low---the 50th percentile of \texttt{pr\_per\_fork} is about $0.23$ across $n=100{,}000$ repository--season rows, indicating that most pairs have limited conversion intensity in this ratio
+    \item The mean is about $3.98$, much larger than the median: the 75th percentile is only $2.0$ while the standard deviation is about $18.7$, so a small share of outlier points pulls the mean upward
+    \item Maximum \texttt{pr\_per\_fork} reaches about $2{,}595$---extremely large values driven by very small fork counts in the denominator relative to many pull requests, which distorts the ratio
+\end{itemize}
+
+\textbf{Implication:} While the metric captures conversion behavior, it is unstable for small fork counts and sensitive to extreme values. Careful handling (e.g., clipping or transformation) is required.
+
+\subsubsection{Key Findings}
+
+The exploratory analysis revealed several important characteristics of the data:
+
+\begin{itemize}
+    \item All activity and contribution variables exhibit strong right-skew and extreme outliers
+    \item A significant share of repositories does not convert forks into pull requests
+    \item Contribution behavior is weakly correlated with activity metrics, indicating a non-trivial prediction task
+    \item Interaction-based signals (especially issue discussions) are more predictive than popularity metrics
+    \item Non-linear relationships are present, suggesting the need for transformation or non-linear modeling approaches
+\end{itemize}
+
+\subsection{Verify Data Quality}
+
+In this stage, the quality of the collected datasets was assessed to identify potential issues that could affect downstream analysis and modeling. The evaluation focused on completeness, consistency, correctness, and the presence of anomalies.
+
+\subsubsection{Missing Values}
+
+Both datasets were examined for missing values across all columns.
+
+No missing values were found in the \texttt{activity\_sample} dataset. Similarly, the \texttt{fork\_pr\_sample} dataset contains no missing values at the top level.
+
+To further validate completeness, nested event structures were inspected by expanding the \texttt{forks} and \texttt{prs} arrays.
+
+The analysis shows:
+\begin{itemize}
+    \item No missing user identifiers within fork events
+    \item Missing entries in pull request arrays correspond to repositories with no pull requests rather than incomplete data
+\end{itemize}
+
+\textbf{Implication:} The dataset is complete; apparent missing values in nested structures reflect absence of events rather than data quality issues.
+
+\subsubsection{Data Consistency}
+
+Consistency checks were performed across datasets:
+
+\begin{itemize}
+    \item No duplicate \texttt{repo\_name-season} pairs were found in either dataset
+    \item The set of repositories is consistent between \texttt{activity\_sample} and \texttt{fork\_pr\_sample}
+\end{itemize}
+
+\textbf{Implication:} The datasets are properly aligned and can be safely joined without loss of information.
+
+\subsubsection{Validity of Values}
+
+All numerical activity metrics (\texttt{watches}, \texttt{pushes}, \texttt{issues}, \texttt{issue\_comments}, \texttt{releases}) were verified to ensure they contain valid values.
+
+\begin{itemize}
+    \item No negative values were detected across any metric
+\end{itemize}
+
+Time-based validation of fork events shows the expected temporal coverage:
+\begin{itemize}
+    \item From: January 2025
+    \item To: September 2025
+\end{itemize}
+
+This corresponds to the defined anchor periods used during data extraction.
+
+\textbf{Implication:} The temporal filtering logic was applied correctly, and all values fall within expected ranges.
+
+\subsubsection{Outliers and Extreme Values}
+
+Quantile analysis [Figure 6b] confirms the presence of extreme values across all activity metrics.
+
+Upper quantiles (e.g., 99th and 99.9th percentiles) are significantly higher than median values [Figure 6a], indicating heavy-tailed distributions.
+
+\textbf{Implication:} These extreme values are not data errors but reflect the natural structure of GitHub activity, where a small number of repositories dominate engagement. However, they may disproportionately influence model training and will require appropriate handling.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{activity_descr.png}
+        \caption{Summary statistics of activity metrics}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{outliers.png}
+        \caption{Outliers in activity metrics}
+    \end{subfigure}
+    \caption{Distribution and extreme values of activity features}
+    \label{fig:activity_outliers}
+\end{figure}
+
+
+\subsubsection{Feature Relationships and Redundancy}
+
+Additional validation was performed to assess relationships between features.
+
+Pearson correlations on the five activity counters ($n=100{,}000$ repository--season rows) are uniformly modest: the largest off-diagonal coefficient is between \texttt{issues} and \texttt{issue\_comments} ($r \approx 0.22$). The next-largest are \texttt{pushes} vs.\ \texttt{issue\_comments} ($r \approx 0.16$) and \texttt{watches} vs.\ \texttt{issues} ($r \approx 0.11$). Every other pair is below $0.10$ (for example, \texttt{watches} vs.\ \texttt{issue\_comments} is about $0.09$, and \texttt{pushes} vs.\ \texttt{issues} about $0.06$). Interaction-related fields therefore co-move slightly more with one another than \texttt{watches} does with the rest, but even the strongest linear link is weak.
+
+No pair approaches a correlation near one, so there is no sign of strong multicollinearity among these engineered activity features.
+
+\textbf{Implication:} Features provide largely complementary information and are suitable for joint use in modeling without aggressive dimensionality reduction driven by redundancy alone.
+
+\subsubsection{Target Stability Check}
+
+The derived metric \texttt{pr\_per\_fork} was analyzed to assess stability.
+
+The distribution is highly skewed, with:
+\begin{itemize}
+    \item Low median values
+    \item High variance
+    \item Extreme maximum values caused by small fork counts combined with multiple pull requests
+\end{itemize}
+
+\textbf{Implication:} The target variable is sensitive to outliers and may require transformation or alternative formulations during modeling.
+
+\subsubsection{Overall Assessment}
+
+The data demonstrates high overall quality:
+
+\begin{itemize}
+    \item No missing values at the table level
+    \item No duplicate records at the repository-season level
+    \item Consistent structure across datasets
+    \item Valid numerical and temporal values
+\end{itemize}
+
+The main characteristics identified are:
+
+\begin{itemize}
+    \item Presence of extreme values (outliers)
+    \item Highly skewed distributions
+    \item Non-linear relationships between variables
+\end{itemize}
+
+These characteristics are expected in real-world GitHub data and do not represent data quality issues. The dataset is suitable for further analysis and modeling, provided that appropriate preprocessing techniques are applied.
+

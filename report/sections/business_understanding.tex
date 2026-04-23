@@ -1,0 +1,285 @@
+\section{Business Understanding}
+This phase focuses on understanding the project objectives from a business perspective and converting them into a data mining problem definition.
+
+\subsection{Determine Business Objectives}
+
+\subsubsection{Background}
+
+\paragraph{Commercial context.}
+Open-source software (OSS) organizations rarely sell the code itself.
+Revenue comes from the surrounding commercial layer: managed hosting, enterprise support, dual licensing, and premium features in an open-core model.
+In each case, the scale and engagement of the external developer community are central value drivers.
+
+\paragraph{What a fork signals.}
+A \emph{fork} on GitHub can reflect one of two qualitatively different patterns:
+\begin{enumerate}
+  \item \textbf{Contributing use.}\quad
+  The developer returns work to upstream through a pull request, which strengthens the project and the community.
+  \item \textbf{Private downstream use.}\quad
+  The fork is maintained on its own with no pull request to upstream: the project delivers value to the user but receives no contribution back.
+\end{enumerate}
+
+\paragraph{Role of this project.}
+The balance between these two patterns is not measured systematically today.
+\textit{GH Archive} captures the public GitHub event stream and makes it possible to estimate fork-to-contribution ratios at repository scale.
+This project defines that measurement and trains a predictive model linking repository-level signals to each outcome.
+
+\subsubsection{Business Objectives}
+\paragraph{Primary objective.}
+Determine, for a sampled set of GitHub repositories, what fraction of forks result in pull requests back to upstream, and identify which repository-level characteristics predict high or low contribution conversion.
+
+\paragraph{Primary users of the analysis}
+\begin{itemize}
+  \item Open-source program managers who oversee community health and engagement strategy.
+  \item Product strategy teams that need to understand how their open-source assets are being adopted and extended.
+  \item Developer relations teams that prioritize outreach based on repository contribution potential.
+\end{itemize}
+
+\paragraph{Decision supported by this analysis.}
+Understanding which types of repositories attract contributing forks versus passive downstream forks allows stakeholders to prioritize community investment, documentation effort, and contribution tooling for the repositories where upstream engagement is most likely.
+
+\paragraph{Related business questions}
+\begin{itemize}
+  \item What fraction of forks for a given repository leads to at least one pull request within a defined period?
+  \item What distinguishes repositories where forks tend to become contributions from those where they do not?
+  \item Are there repository segments where conversion is consistently low despite high fork activity?
+\end{itemize}
+
+\subsubsection{Business Success Criteria}
+The project outcome is considered successful if it produces:
+\begin{itemize}
+  \item A reliable and reproducible repository-level fork-to-PR conversion metric computed from public event data.
+  \item A predictive model that identifies high- and low-conversion repositories with better accuracy than a naive baseline.
+  \item An interpretable set of repository features associated with conversion outcomes, reviewable by non-technical stakeholders.
+  \item A documented pipeline that can be re-run on new time periods.
+\end{itemize}
+Subjective judgment of output usefulness rests with the Business Analyst and the Business Unit.
+
+\subsection{Assess Situation}
+
+\subsubsection{Inventory of Resources}
+\paragraph{Personnel}
+\begin{itemize}
+  \item Business Unit.
+  \item Project Manager.
+  \item Data Scientist.
+  \item ML Engineer.
+  \item Business Analyst.
+\end{itemize}
+
+\paragraph{Data}
+\begin{itemize}
+  \item GH Archive public dataset in BigQuery (\texttt{githubarchive.month.*}).
+  \item Core events: \texttt{ForkEvent}, \texttt{PullRequestEvent}.
+  \item Context events for feature engineering: \texttt{PushEvent}, \texttt{WatchEvent}, \texttt{IssuesEvent}, \texttt{IssueCommentEvent}, \texttt{ReleaseEvent}.
+\end{itemize}
+
+\paragraph{Computing and software}
+\begin{itemize}
+  \item BigQuery for SQL extraction and aggregation.
+  \item Python stack (pandas/polars, scikit-learn, Jupyter) for modeling and evaluation.
+\end{itemize}
+
+\subsubsection{Requirements, Assumptions, and Constraints}
+\paragraph{Requirements}
+\begin{itemize}
+  \item Results must be interpretable via thresholds, feature rankings, or trend summaries.
+  \item Results must be reproducible: identical inputs produce identical outputs; all steps versioned.
+  \item Data is publicly available under open access; no legal restrictions on analytical use.
+  \item Scope must be bounded: observation window, sampling frame, and label definition fixed before modeling.
+  \item Outputs must include uncertainty ranges from validation folds.
+\end{itemize}
+
+\paragraph{Assumptions}
+\begin{itemize}
+  \item A fork is marked as converted when at least one PR is observed that can be reasonably matched to the fork within the chosen window. Due to the absence of explicit linkage, this relationship will be approximated using heuristic matching.
+  \item Multi-period sampling is more representative than a single-day snapshot.
+  \item Repository-level aggregation reduces event-level noise.
+\end{itemize}
+
+\paragraph{Constraints}
+\begin{itemize}
+  \item \textbf{Fork-to-PR linkage is indirect.} The relationship must be inferred by matching repository identities across event types; no explicit link is stored in GH Archive.
+  \item \textbf{Upstream metadata is sparse.} Static repository fields appear only when a pull request event is recorded. Repositories that never appear in such events must be described using event-aggregate features only.
+  \item \textbf{Raw data volume is large.} One day of GH Archive is about 3\,GB compressed. A three-month fork anchor plus a 90-day observation window spans roughly 270\,GB compressed. All aggregation must run inside BigQuery before any export.
+  \item \textbf{Class imbalance is expected.} Observed same-day fork-to-PR rate is 3--4\%; even at 90 days the positive class will be a small minority.
+\end{itemize}
+
+\subsubsection{Risks and Contingencies}
+\begin{itemize}
+  \item \textbf{Sampling bias across repository sizes.}
+  \begin{itemize}
+    \item \textbf{Contingency:} Use stratified sampling by activity/popularity bands and report sample composition.
+  \end{itemize}
+  \item \textbf{Noisy fork-to-PR matching.}
+  \begin{itemize}
+    \item \textbf{Contingency:} Validate joins on sampled records and run consistency checks.
+  \end{itemize}
+  \item \textbf{Temporal drift and seasonality.}
+  \begin{itemize}
+    \item \textbf{Contingency:} Use time-based validation and compare multiple periods.
+  \end{itemize}
+  \item \textbf{Over-interpretation of correlational results.}
+  \begin{itemize}
+    \item \textbf{Contingency:} Report uncertainty and explicitly state non-causal interpretation.
+  \end{itemize}
+\end{itemize}
+
+\subsubsection{Terminology}
+\paragraph{Business terminology}
+\begin{itemize}
+  \item \textbf{Fork}: a copy of a repository created by an external developer under their own account, typically to experiment or contribute.
+  \item \textbf{Upstream repository}: the original repository from which a fork is derived.
+  \item \textbf{Contribution}: an externally developed change submitted back to the upstream repository, typically as a pull request.
+  \item \textbf{Contribution conversion}: the outcome where a fork leads to at least one pull request to upstream.
+  \item \textbf{Fork-to-PR conversion rate}: the fraction of forks for a repository that resulted in at least one upstream pull request within a defined observation period.
+  \item \textbf{Community health}: the degree to which a repository attracts active, contributing external developers.
+\end{itemize}
+
+\paragraph{Data mining terminology}
+\begin{itemize}
+  \item \textbf{ForkEvent}: a GH Archive event record that captures the creation of a fork. Used to identify fork instances and their upstream repositories.
+  \item \textbf{PullRequestEvent}: a GH Archive event record that captures pull request actions. Used to detect whether a fork produced an upstream contribution.
+  \item \textbf{Observation window}: the post-fork time interval within which a PR must appear for the fork to be labeled as converted. Example: 90 days after fork creation.
+  \item \textbf{Repository-level aggregation}: grouping individual fork/PR event pairs by upstream repository to compute a conversion rate as a modeling target.
+  \item \textbf{Stratified sampling}: selecting repositories proportionally across activity or popularity bands to ensure the sample is representative of the full distribution.
+\end{itemize}
+
+\subsubsection{Costs and Benefits}
+\paragraph{Project costs}
+\begin{itemize}
+  \item \textbf{Data extraction:} design and execution of BigQuery SQL pipelines over multi-month GH Archive tables; estimated 2--4 major extraction runs with iterative refinement.
+  \item \textbf{Label construction and validation:} fork-to-PR join logic, observation window tuning, and manual spot-checks on matched pairs to verify entity linkage correctness.
+  \item \textbf{Feature engineering:} aggregation of event-based signals at the repository level (e.g., pushes, watches, issues) and construction of derived features (e.g., PR-to-fork ratios).
+  \item \textbf{Modeling and evaluation:} training and cross-validating regression and classification baselines; hyperparameter search and ranking metric computation.
+  \item \textbf{Reporting:} interpretation of model outputs, documentation of limitations, and production of final deliverables.
+  \item \textbf{Infrastructure:} BigQuery query processing cost scales with the volume of scanned data; estimated low-to-moderate usage given partitioned queries and table wildcards.
+\end{itemize}
+
+\paragraph{Potential business benefits}
+\begin{itemize}
+  \item \textbf{Quantified community health signal:} for the first time, stakeholders obtain a concrete numeric measure---fork-to-PR conversion rate per repository---rather than relying on subjective community perception.
+  \item \textbf{Prioritized portfolio view:} repositories can be ranked by expected contribution conversion, directing limited community investment toward projects with the highest return on engagement.
+  \item \textbf{Early detection of passive-use segments:} repositories with many forks but low conversion are identified systematically, flagging potential gaps between what the project offers and what downstream users actually need.
+  \item \textbf{Reusable pipeline:} the BigQuery extraction and feature construction logic can be re-run on any future period with no redesign, reducing the marginal cost of each subsequent analysis cycle.
+\end{itemize}
+
+\paragraph{Cost benefit comparison}
+Under the assumptions below, expected quarterly benefit exceeds recurring quarterly operating cost and can recover setup cost within the first one to two quarters.
+
+\paragraph{Rough quantitative estimate (illustrative assumptions)}
+\begin{itemize}
+  \item Repositories under active monitoring each quarter: 300.
+  \item Average enterprise upgrade gross margin per converted repository: \$40.
+  \item If conversion risk is not detected early, expected margin impact on at-risk repositories: 10--15\% (=\$4--\$6 per repository).
+  \item The analysis gives one-quarter earlier warning for 25--35\% of at-risk repositories.
+\end{itemize}
+
+\paragraph{Estimated quarterly benefit range}
+\begin{itemize}
+  \item 300 $\times$ (0.25 to 0.35) $\times$ (\$4 to \$6) $\approx$ \$300 to \$630 per quarter.
+\end{itemize}
+
+\paragraph{Estimated project cost range}
+\begin{itemize}
+  \item Initial setup: 20 analyst hours.
+  \item Quarterly refresh: 4 analyst hours.
+  \item Assuming \$20/hour internal cost: initial \$400, then \$80 per quarter.
+\end{itemize}
+
+Annualized benefit (\$1{,}200--\$2{,}520) is above annualized operating cost after setup (\$320/year), and setup cost can be recovered within the first one to two quarters under these assumptions.
+
+\subsection{Determine Data Mining Goals}
+
+\subsubsection{Data Mining Goals}
+\begin{itemize}
+  \item Build repository-level target variables from fork-to-PR conversion in fixed windows.
+  \item Train either conversion-rate regression or bucketed conversion classification models.
+  \item Produce ranking outputs for high vs. low expected conversion repositories.
+  \item Quantify feature influence using interpretable model diagnostics.
+\end{itemize}
+
+\subsubsection{Data Mining Success Criteria}
+\begin{itemize}
+  \item \textbf{Conversion rate prediction:} mean absolute error on held-out repositories must be lower than the MAE of the mean-prediction baseline; R\textsuperscript{2} must be positive on the test fold.
+  \item \textbf{Classification:} macro-averaged F1 score must exceed the stratified random baseline by at least 5 percentage points.
+  \item \textbf{Ranking quality:} precision@10\% must exceed the rate expected under random ranking; NDCG or lift@k reported for the top decile.
+  \item \textbf{Validation stability:} performance metrics must not degrade by more than 15\% between the best and worst time-based validation fold, confirming that results are not driven by a single time period.
+  \item \textbf{Feature interpretability:} the top 5 features by importance must have a plausible directional relationship with conversion that can be explained to a non-technical audience without further analysis.
+  \item \textbf{Sensitivity check:} conversion rates computed under two alternative observation windows (e.g., 30 days and 90 days) must yield qualitatively consistent rankings; large rank reversals flag a fragile label definition.
+\end{itemize}
+
+\subsection{Produce Project Plan}
+
+\subsubsection{Project Plan}
+\paragraph{Stage 1: Data understanding}\mbox{}\\
+\textbf{Duration:} 1 week.\\
+\textbf{Resources required:} Data Scientist, Business Analyst, BigQuery.\\
+\textbf{Inputs:} GH Archive day/month tables, event schemas.\\
+\textbf{Outputs:} schema notes, feasibility checks, sampled repository list.\\
+\textbf{Dependencies:} BigQuery access and agreement on the event types and time range to be queried.\\
+\textbf{Decisions made at this stage:} anchor period (3 calendar months of \texttt{ForkEvent}); observation window candidates (30, 60, 90 days post-fork); stratified sampling bands (fork-count quintiles); minimum fork threshold per repository.
+
+\paragraph{Stage 2: Data preparation}\mbox{}\\
+\textbf{Duration:} 2 weeks.\\
+\textbf{Resources required:} Data Scientist, ML Engineer.\\
+\textbf{Inputs:} sampled repositories, fork and PR event extracts.\\
+\textbf{Outputs:} labeled repository-level dataset and feature table.\\
+\textbf{Dependencies:} approved matching logic and observation windows.\\
+\textbf{Decisions made at this stage:} final observation window (selected from candidates); feature groups --- event-aggregate features (push rate, watch rate, issue rate, PR rate) and static metadata from \texttt{pull\_request.base.repo} where available; train/test split boundary (chronological: first 2 months train, third month test).
+
+\paragraph{Stage 3: Modeling}\mbox{}\\
+\textbf{Duration:} 2 weeks.\\
+\textbf{Resources required:} Data Scientist, ML Engineer.\\
+\textbf{Inputs:} training and validation datasets.\\
+\textbf{Outputs:} baseline and tuned models, ranking outputs.\\
+\textbf{Dependencies:} finalized feature set and validation protocol.\\
+\textbf{Decisions made at this stage:} model candidates --- mean-rate baseline, Logistic Regression, Random Forest, Gradient Boosting; target formulation --- conversion rate regression or low/medium/high bucket classification; class imbalance handling via class weights and threshold tuning.
+
+\paragraph{Stage 4: Evaluation}\mbox{}\\
+\textbf{Duration:} 1 week.\\
+\textbf{Resources required:} Data Scientist, Business Analyst, Project Manager.\\
+\textbf{Inputs:} trained models, hold-out predictions.\\
+\textbf{Outputs:} metric report, error analysis, interpretation summary.\\
+\textbf{Dependencies:} completed modeling runs and evaluation scripts.\\
+\textbf{Evaluation strategy:} chronological hold-out on the third month; primary metrics MAE and R\textsuperscript{2} for regression, macro-F1 for classification, precision@10\% for ranking; sensitivity analysis over the two observation window lengths; SHAP values for top-5 feature interpretation.
+
+\paragraph{Stage 5: Deployment}\mbox{}\\
+\textbf{Duration:} 1 week.\\
+\textbf{Resources required:} ML Engineer, Project Manager.\\
+\textbf{Inputs:} final SQL scripts, model artifacts, documentation.\\
+\textbf{Outputs:} reproducible pipeline and project handover package.\\
+\textbf{Dependencies:} approval of evaluation results.\\
+\textbf{Decisions made at this stage:} pipeline delivered as versioned BigQuery SQL scripts plus a Python notebook; model serialised with \texttt{joblib}; final report documents all parameter choices and their rationale.
+
+\subsubsection{Review points and large-scale iterations}
+\begin{itemize}
+  \item Review point after Stage 1: verify sampling representativeness and schema assumptions.
+  \item Review point after Stage 2: verify label quality and feature completeness.
+  \item Iteration loop between Stage 2 and Stage 3 if label window or joins need adjustment.
+  \item Review point after Stage 4: decide whether model quality is sufficient or another iteration is required.
+\end{itemize}
+
+\subsubsection{Schedule-risk dependencies (actions)}
+\begin{itemize}
+  \item \textbf{Risk:} delayed BigQuery extraction due to oversized scans. \textbf{Action:} partitioned queries and narrower pilot windows first.
+  \item \textbf{Risk:} weak target signal in selected period. \textbf{Action:} extend anchor period and rebalance sampled repositories.
+  \item \textbf{Risk:} unstable metrics across folds. \textbf{Action:} enforce rolling time splits and simplify feature set.
+\end{itemize}
+
+\subsubsection{Initial Assessment of Tools and Techniques}
+\begin{itemize}
+  \item \textbf{Data extraction:} BigQuery SQL with table wildcards and JSON extraction functions.
+  \item \textbf{Transformation:} SQL aggregations plus pandas/polars for final feature shaping.
+  \item \textbf{Modeling:} scikit-learn linear and tree-based baselines.
+  \item \textbf{Evaluation:} time-based validation, ranking metrics, and calibration diagnostics.
+\end{itemize}
+
+
+
+
+
+
+
+
+

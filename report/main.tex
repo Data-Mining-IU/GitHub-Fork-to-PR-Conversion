@@ -1,0 +1,50 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\graphicspath{{images/}}
+\usepackage[english]{babel}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage[a4paper,left=1.5cm,right=1.5cm,top=1.7cm,bottom=1.7cm]{geometry}
+\usepackage{float}
+\usepackage{amsmath} 
+\usepackage{subcaption}
+
+\setcounter{secnumdepth}{0}
+
+\titleformat{\section}[block]
+  {\Large\bfseries\color{black!70!gray}}
+  {}
+  {0pt}
+  {}
+  
+\titleformat{\subsection}[block]
+  {\large\bfseries\color{cyan!60!blue}}
+  {}
+  {0pt}
+  {}
+  [\vspace{-0.3ex}\color{cyan!60!blue}\titlerule]
+
+\titleformat{\subsubsection}[block]
+  {\normalsize\bfseries\color{black}}
+  {}
+  {0pt}
+  {}
+  
+\titlespacing*{\subsubsection}
+  {0pt}{3ex}{2ex}
+  
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{\fill}
+  {\Huge\bfseries Predicting Fork-to-PR Conversion in Open-Source Repositories\par}
+  \vspace*{\fill}
+\end{titlepage}
+
+\input{sections/business_understanding}
+\input{sections/data_understanding}
+\input{sections/data_preparation}
+
+\end{document}
