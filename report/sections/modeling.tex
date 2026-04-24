@@ -1,0 +1,118 @@
+\section{Modeling}
+
+This phase implements CRISP-DM Stage 4 using the prepared integrated dataset (\texttt{modeling\_dataset.parquet}/\texttt{.csv}) and evaluates both target formulations defined in the business and data mining goals.
+
+\subsection{Select Modeling Technique}
+
+\subsubsection{Modeling Objectives}
+
+Two predictive tasks are modeled:
+\begin{itemize}
+    \item \textbf{Classification:} predict whether a repository-season has at least one converted fork (\texttt{has\_conversion}).
+    \item \textbf{Regression:} predict the conversion intensity (\texttt{fork\_conversion\_rate}).
+\end{itemize}
+
+This dual formulation supports both operational triage (high vs.\ low conversion potential) and continuous forecasting of conversion magnitude.
+
+\subsubsection{Chosen Techniques}
+
+The modeling stage compares baseline and non-baseline methods:
+\begin{itemize}
+    \item \textbf{Naive baselines}
+    \begin{itemize}
+        \item Classification: majority-class predictor.
+        \item Regression: mean conversion-rate predictor.
+    \end{itemize}
+    \item \textbf{Logistic Regression} for interpretable linear decision boundaries under class imbalance.
+    \item \textbf{Random Forest} for non-linear interactions and robustness on skewed activity signals.
+    \item \textbf{Gradient Boosting} (classification) as an additional non-linear ensemble benchmark.
+\end{itemize}
+
+\subsection{Generate Test Design}
+
+\subsubsection{Validation Protocol}
+
+\begin{itemize}
+    \item Hold-out split: 80\% training / 20\% test.
+    \item Random seed fixed at 42 for reproducibility.
+    \item Classification split stratified by \texttt{has\_conversion}.
+\end{itemize}
+
+\subsubsection{Feature and Target Setup}
+
+\begin{itemize}
+    \item Input features include engineered activity signals (notably \texttt{log1p\_*} columns), season, and auxiliary non-leakage counters.
+    \item Leakage-prone fields are excluded from predictors (\texttt{has\_conversion}, \texttt{fork\_conversion\_rate}, \texttt{n\_converted\_forks}, \texttt{repo\_name}).
+    \item Numerical features are median-imputed and scaled for linear models.
+    \item Categorical features are imputed with mode and one-hot encoded.
+\end{itemize}
+
+\subsubsection{Evaluation Metrics}
+
+\paragraph{Classification}
+\begin{itemize}
+    \item Accuracy
+    \item Macro-F1 (primary for imbalance-aware quality)
+    \item Precision
+    \item ROC-AUC (where probability outputs are available)
+\end{itemize}
+
+\paragraph{Regression}
+\begin{itemize}
+    \item Mean Absolute Error (MAE)
+    \item $R^2$
+\end{itemize}
+
+\subsection{Build Model}
+
+\subsubsection{Implementation}
+
+All models are implemented in \texttt{scikit-learn} pipelines in \texttt{src/4\_modeling.ipynb}:
+\begin{itemize}
+    \item shared preprocessing through \texttt{ColumnTransformer};
+    \item model fitting on train split only;
+    \item test predictions and metric computation on held-out data.
+\end{itemize}
+
+The following trained models are compared:
+\begin{itemize}
+    \item Classification: baseline, Logistic Regression, Random Forest Classifier, Gradient Boosting Classifier.
+    \item Regression: baseline mean, Linear Regression, Random Forest Regressor.
+\end{itemize}
+
+\subsection{Assess Model}
+
+\subsubsection{Assessment Against Success Criteria}
+
+The notebook directly checks whether:
+\begin{itemize}
+    \item Classification models outperform the majority baseline on Macro-F1.
+    \item Regression models reduce MAE versus the mean baseline.
+    \item Regression models achieve non-negative and preferably positive $R^2$ on the test set.
+\end{itemize}
+
+These checks align with the data mining success criteria defined in the business understanding stage.
+
+\subsubsection{Practical Interpretation}
+
+\begin{itemize}
+    \item Tree ensembles provide flexible non-linear modeling for heavy-tailed repository activity.
+    \item Logistic/linear models provide a transparent baseline for communication to non-technical stakeholders.
+    \item Baseline comparisons prevent over-claiming improvements in an imbalanced, noisy environment.
+\end{itemize}
+
+\subsubsection{Limitations}
+
+\begin{itemize}
+    \item Validation is random hold-out; future iterations should add strict time-based folds for drift sensitivity.
+    \item Target construction is based on heuristic fork-to-PR matching and may contain residual label noise.
+    \item Extreme conversion ratios in low-fork repositories can still challenge regression stability.
+\end{itemize}
+
+\subsubsection{Modeling Stage Deliverables}
+
+\begin{itemize}
+    \item Reproducible notebook: \texttt{src/Modeling.ipynb}.
+    \item Comparable benchmark tables for classification and regression.
+    \item Evidence-based selection of the best-performing candidate model per target formulation.
+\end{itemize}
