@@ -1,6 +1,6 @@
 \section{Modeling}
 
-This phase implements CRISP-DM Stage 4 using the prepared integrated dataset (\texttt{modeling\_dataset.parquet}/\texttt{.csv}) and evaluates both target formulations defined in the business and data mining goals.
+This phase implements CRISP-DM Stage 4 using the prepared integrated dataset (\texttt{modeling\_dataset.parquet}/\texttt{.csv}) and evaluates all data mining success criteria, including ranking quality, validation stability, feature interpretability, and sensitivity checks.
 
 \subsection{Select Modeling Technique}
 
@@ -63,6 +63,13 @@ The modeling stage compares baseline and non-baseline methods:
     \item $R^2$
 \end{itemize}
 
+\paragraph{Ranking quality}
+\begin{itemize}
+    \item Precision@10\%
+    \item Lift@10\%
+    \item NDCG@10\%
+\end{itemize}
+
 \subsection{Build Model}
 
 \subsubsection{Implementation}
@@ -80,6 +87,15 @@ The following trained models are compared:
     \item Regression: baseline mean, Linear Regression, Random Forest Regressor.
 \end{itemize}
 
+\subsubsection{Hyperparameter Tuning}
+
+Compact hyperparameter tuning is implemented with \texttt{RandomizedSearchCV}:
+\begin{itemize}
+    \item \textbf{Classification:} tuned Random Forest with macro-F1 objective.
+    \item \textbf{Regression:} tuned Random Forest with MAE objective.
+\end{itemize}
+The tuned models are compared to untuned baselines on the held-out test set.
+
 \subsection{Assess Model}
 
 \subsubsection{Assessment Against Success Criteria}
@@ -93,6 +109,122 @@ The notebook directly checks whether:
 
 These checks align with the data mining success criteria defined in the business understanding stage.
 
+\paragraph{Observed hold-out results (20\% test, random split)}
+\begin{itemize}
+    \item \textbf{Best classification model:} Gradient Boosting (\texttt{macro-F1} $=0.8514$, \texttt{ROC-AUC} $=0.9329$, \texttt{accuracy} $=0.8514$).
+    \item \textbf{Classification baseline:} Majority predictor (\texttt{macro-F1} $=0.3425$).
+    \item \textbf{Best regression model:} Random Forest Regressor (\texttt{MAE} $=0.0750$, $R^2=0.6313$).
+    \item \textbf{Regression baseline:} Mean predictor (\texttt{MAE} $=0.1589$, $R^2\approx -0.0002$).
+\end{itemize}
+
+Thus, the core prediction criteria are satisfied on hold-out data: MAE improves vs baseline and $R^2$ is positive.
+
+\subsubsection{Ranking Quality Results}
+
+For the best classification model, repository-seasons are ranked by predicted conversion probability and evaluated in the top decile:
+\begin{itemize}
+    \item Precision@10\% vs random baseline rate.
+    \item Lift@10\% (top-decile precision divided by global positive rate).
+    \item NDCG@10\% for top-ranked quality.
+\end{itemize}
+
+A decile-level lift table and cumulative gains curve are produced in the notebook for stakeholder interpretation.
+
+\paragraph{Observed ranking metrics}
+\begin{itemize}
+    \item Precision@10\%: $0.9775$
+    \item Base conversion rate (random expectation): $0.4792$
+    \item Lift@10\%: $2.0401$
+    \item NDCG@10\%: $0.9795$
+\end{itemize}
+
+Top-decile precision is roughly two times the random baseline rate, indicating strong ranking utility for prioritization.
+
+\subsubsection{Validation Stability (Time-Based)}
+
+To satisfy drift sensitivity requirements, strict seasonal validation is implemented:
+\begin{itemize}
+    \item Train on \texttt{winter\_spring}
+    \item Test on \texttt{summer\_autumn}
+\end{itemize}
+
+Metrics from the random hold-out split are compared to this time-based split, and relative degradation is reported to assess stability.
+
+\paragraph{Observed time-based results}
+\begin{itemize}
+    \item Classification (Gradient Boosting): \texttt{macro-F1} $=0.8094$, \texttt{ROC-AUC} $=0.9086$.
+    \item Regression (Random Forest): \texttt{MAE} $=0.0824$, $R^2=0.4425$.
+    \item Relative drop vs hold-out:
+    \begin{itemize}
+        \item \texttt{macro-F1}: about $4.93\%$ drop.
+        \item $R^2$: about $29.90\%$ drop.
+    \end{itemize}
+\end{itemize}
+
+By the originally stated stability rule (no more than 15\% degradation), classification remains stable while regression shows material temporal degradation.
+
+\subsubsection{Feature Interpretability}
+
+Interpretability is produced via permutation importance on the hold-out split for the best classification model. The top-5 features are reported with their mean importance and variance, providing a stakeholder-readable explanation of which repository signals drive conversion predictions.
+
+\paragraph{Top-5 features (permutation importance, macro-F1 impact)}
+\begin{itemize}
+    \item \texttt{n\_pr\_events} (dominant signal; mean importance $\approx 0.3261$)
+    \item \texttt{issue\_comments\_winsor} ($\approx 0.00166$)
+    \item \texttt{n\_forks} ($\approx 0.00148$)
+    \item \texttt{issue\_comments} ($\approx 0.00114$)
+    \item \texttt{season\_winter\_spring} ($\approx 0.00097$)
+\end{itemize}
+
+The model is primarily driven by PR-event intensity and supported by interaction/fork activity features.
+
+\subsubsection{Sensitivity Check}
+
+Sensitivity is evaluated in two modes:
+\begin{itemize}
+    \item If explicit \texttt{30d}/\texttt{90d} targets exist: compare ranking overlap and Spearman rank correlation.
+    \item Otherwise: run a robust proxy sensitivity check by comparing classification-based and regression-based rankings on the same hold-out population.
+\end{itemize}
+
+This verifies that conclusions are not overly fragile to target formulation.
+
+\paragraph{Observed sensitivity output}
+Dataset does not contain explicit 30-day and 90-day target columns, so proxy sensitivity is used:
+\begin{itemize}
+    \item Top-10\% overlap between classification and regression rankings: $0.337$
+    \item Spearman rank correlation between rankings: $0.8843$
+\end{itemize}
+
+High rank correlation indicates consistent overall ordering; moderate top-decile overlap shows some variation in the exact highest-priority subset.
+
+\subsubsection{Visual Model Analysis}
+
+The modeling notebook now produces visual diagnostics and exports them to report images:
+\begin{itemize}
+    \item Predicted probability histogram for the best classifier.
+    \item Cumulative gains curve for ranking quality.
+    \item Top-5 feature importance chart.
+    \item Lift table by decile (tabular visual output in notebook).
+\end{itemize}
+
+\IfFileExists{images/modeling_cumulative_gains.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{modeling_cumulative_gains.png}
+    \caption{Cumulative gains curve for repository conversion ranking}
+    \label{fig:modeling_gains}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_top5_features.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{modeling_top5_features.png}
+    \caption{Top-5 permutation-importance features for conversion classification}
+    \label{fig:modeling_top5_features}
+\end{figure}
+}{}
+
 \subsubsection{Practical Interpretation}
 
 \begin{itemize}
@@ -104,15 +236,30 @@ These checks align with the data mining success criteria defined in the business
 \subsubsection{Limitations}
 
 \begin{itemize}
-    \item Validation is random hold-out; future iterations should add strict time-based folds for drift sensitivity.
-    \item Target construction is based on heuristic fork-to-PR matching and may contain residual label noise.
+    \item Time-based validation is now implemented at seasonal granularity; with only two seasonal blocks, fold diversity is still limited.
+    \item Target construction remains based on heuristic fork-to-PR matching and may contain residual label noise.
     \item Extreme conversion ratios in low-fork repositories can still challenge regression stability.
+\end{itemize}
+
+\subsubsection{Hyperparameter Tuning Outcome}
+
+Randomized search was run for Random Forest models.
+\begin{itemize}
+    \item Tuned RF \textbf{classification}: \texttt{macro-F1} $=0.8503$, \texttt{ROC-AUC} $=0.9322$.
+    \item Tuned RF \textbf{regression}: \texttt{MAE} $=0.0750$, $R^2=0.6338$.
+\end{itemize}
+
+Interpretation:
+\begin{itemize}
+    \item For classification, tuning RF did not surpass Gradient Boosting (\texttt{macro-F1} $=0.8514$).
+    \item For regression, tuning gave a small improvement in $R^2$ over the initial RF model.
 \end{itemize}
 
 \subsubsection{Modeling Stage Deliverables}
 
 \begin{itemize}
     \item Reproducible notebook: \texttt{src/Modeling.ipynb}.
-    \item Comparable benchmark tables for classification and regression.
-    \item Evidence-based selection of the best-performing candidate model per target formulation.
+    \item Benchmark tables for classification, regression, ranking, time-based stability, and sensitivity checks.
+    \item Hyperparameter-tuned model variants with parameter logs.
+    \item Visual diagnostics (gains curve, top-feature importance, and lift table outputs).
 \end{itemize}
