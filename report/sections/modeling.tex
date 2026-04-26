@@ -1,6 +1,6 @@
 \section{Modeling}
 
-This phase implements CRISP-DM Stage 4 using the prepared integrated dataset (\texttt{modeling\_dataset.parquet}/\texttt{.csv}) and evaluates all data mining success criteria, including ranking quality, validation stability, feature interpretability, and sensitivity checks.
+This phase implements CRISP-DM Stage 4 using the prepared integrated dataset in \texttt{src/data/modeling\_dataset.parquet} (or \texttt{.csv} fallback). It evaluates the modeling criteria that are directly available from the exported 90-day dataset and documents the remaining label-window sensitivity requirement.
 
 \subsection{Select Modeling Technique}
 
@@ -74,7 +74,7 @@ The modeling stage compares baseline and non-baseline methods:
 
 \subsubsection{Implementation}
 
-All models are implemented in \texttt{scikit-learn} pipelines in \texttt{src/4\_modeling.ipynb}:
+All models are implemented in \texttt{scikit-learn} pipelines in \texttt{src/Modeling.ipynb}:
 \begin{itemize}
     \item shared preprocessing through \texttt{ColumnTransformer};
     \item model fitting on train split only;
@@ -140,28 +140,31 @@ A decile-level lift table and cumulative gains curve are produced in the noteboo
 
 Top-decile precision is roughly two times the random baseline rate, indicating strong ranking utility for prioritization.
 
-\subsubsection{Validation Stability (Time-Based)}
+\subsubsection{Validation Stability (Time-Based Folds)}
 
-To satisfy drift sensitivity requirements, strict seasonal validation is implemented:
+\textbf{What a ``fold'' means here.} The modeling table is keyed by \texttt{season} with two values (\texttt{winter\_spring} and \texttt{summer\_autumn}). A time-based fold trains on one season and tests on the other. Because there are exactly two seasons, we evaluate \textbf{two folds}:
 \begin{itemize}
-    \item Train on \texttt{winter\_spring}
-    \item Test on \texttt{summer\_autumn}
+    \item Fold A: train \texttt{winter\_spring} $\rightarrow$ test \texttt{summer\_autumn}
+    \item Fold B: train \texttt{summer\_autumn} $\rightarrow$ test \texttt{winter\_spring}
 \end{itemize}
 
-Metrics from the random hold-out split are compared to this time-based split, and relative degradation is reported to assess stability.
+\textbf{How this maps to the success criterion.} The criterion compares the \textbf{best vs worst fold} for each metric (not random hold-out vs a single temporal split). For higher-is-better metrics we report relative gap $(\text{best}-\text{worst})/\text{best}$; for MAE (lower is better) we report $(\text{worst}-\text{best})/\text{best}$.
 
-\paragraph{Observed time-based results}
+\paragraph{Observed fold metrics (best models)}
 \begin{itemize}
-    \item Classification (Gradient Boosting): \texttt{macro-F1} $=0.8094$, \texttt{ROC-AUC} $=0.9086$.
-    \item Regression (Random Forest): \texttt{MAE} $=0.0824$, $R^2=0.4425$.
-    \item Relative drop vs hold-out:
-    \begin{itemize}
-        \item \texttt{macro-F1}: about $4.93\%$ drop.
-        \item $R^2$: about $29.90\%$ drop.
-    \end{itemize}
+    \item Fold A (winter$\rightarrow$summer), Gradient Boosting / Random Forest: \texttt{macro-F1} $=0.8094$, \texttt{ROC-AUC} $=0.9086$, regression \texttt{MAE} $=0.0824$, $R^2=0.4425$.
+    \item Fold B (summer$\rightarrow$winter), same models: \texttt{macro-F1} $=0.8549$, \texttt{ROC-AUC} $=0.9404$, regression \texttt{MAE} $=0.0847$, $R^2=0.5774$.
 \end{itemize}
 
-By the originally stated stability rule (no more than 15\% degradation), classification remains stable while regression shows material temporal degradation.
+\paragraph{Best vs worst fold gaps}
+\begin{itemize}
+    \item \texttt{macro-F1}: about $5.33\%$ gap (passes the 15\% rule).
+    \item \texttt{ROC-AUC}: about $3.38\%$ gap (passes).
+    \item \texttt{MAE}: about $2.73\%$ gap (passes).
+    \item $R^2$: about $23.36\%$ gap (\textbf{fails} the 15\% rule).
+\end{itemize}
+
+So: training only on \texttt{winter\_spring} and testing on \texttt{summer\_autumn} is a valid \emph{single} temporal evaluation, but it is not sufficient by itself to satisfy the written ``best vs worst fold'' rule; the notebook therefore reports \textbf{both} directions.
 
 \subsubsection{Feature Interpretability}
 
@@ -178,33 +181,20 @@ Interpretability is produced via permutation importance on the hold-out split fo
 
 The model is primarily driven by PR-event intensity and supported by interaction/fork activity features.
 
-\subsubsection{Sensitivity Check}
+\subsubsection{Sensitivity Check (90-Day Observation Window Only)}
 
-Sensitivity is evaluated in two modes:
-\begin{itemize}
-    \item If explicit \texttt{30d}/\texttt{90d} targets exist: compare ranking overlap and Spearman rank correlation.
-    \item Otherwise: run a robust proxy sensitivity check by comparing classification-based and regression-based rankings on the same hold-out population.
-\end{itemize}
+All exported labels in this project correspond to a \textbf{single fork-to-PR observation window of 90 days} (Data Preparation: \texttt{OBSERVATION\_DAYS = 90}). The modeling notebook does not mix multiple window definitions.
 
-This verifies that conclusions are not overly fragile to target formulation.
-
-\paragraph{Observed sensitivity output}
-Dataset does not contain explicit 30-day and 90-day target columns, so proxy sensitivity is used:
-\begin{itemize}
-    \item Top-10\% overlap between classification and regression rankings: $0.337$
-    \item Spearman rank correlation between rankings: $0.8843$
-\end{itemize}
-
-High rank correlation indicates consistent overall ordering; moderate top-decile overlap shows some variation in the exact highest-priority subset.
+Therefore, the formal ``alternative observation windows'' sensitivity criterion is \textbf{not re-measured inside this notebook}. To assess sensitivity to a different window length, Stage~3 must be re-run to export an alternate label column; that check is intentionally outside this notebook so the modeling stage stays aligned with one fixed label contract.
 
 \subsubsection{Visual Model Analysis}
 
-The modeling notebook now produces visual diagnostics and exports them to report images:
+The modeling notebook produces visual diagnostics. A subset is exported to report images, while the rest remains notebook-only:
 \begin{itemize}
-    \item Predicted probability histogram for the best classifier.
-    \item Cumulative gains curve for ranking quality.
-    \item Top-5 feature importance chart.
-    \item Lift table by decile (tabular visual output in notebook).
+    \item Predicted probability histogram for the best classifier (notebook-only).
+    \item Cumulative gains curve for ranking quality (exported to report images).
+    \item Top-5 feature importance chart (exported to report images).
+    \item Lift table by decile (tabular output in notebook).
 \end{itemize}
 
 \IfFileExists{images/modeling_cumulative_gains.png}{
@@ -236,7 +226,8 @@ The modeling notebook now produces visual diagnostics and exports them to report
 \subsubsection{Limitations}
 
 \begin{itemize}
-    \item Time-based validation is now implemented at seasonal granularity; with only two seasonal blocks, fold diversity is still limited.
+    \item Time-based validation uses two seasonal folds (both train/test directions). This matches the ``best vs worst fold'' wording, but still provides only two temporal regimes; richer multi-fold checks require exporting additional time slices.
+    \item Regression $R^2$ fails the 15\% best-vs-worst-fold stability rule in this sample, even though classification metrics pass.
     \item Target construction remains based on heuristic fork-to-PR matching and may contain residual label noise.
     \item Extreme conversion ratios in low-fork repositories can still challenge regression stability.
 \end{itemize}
@@ -259,7 +250,8 @@ Interpretation:
 
 \begin{itemize}
     \item Reproducible notebook: \texttt{src/Modeling.ipynb}.
-    \item Benchmark tables for classification, regression, ranking, time-based stability, and sensitivity checks.
+    \item Benchmark tables for classification, regression, ranking, and time-based stability.
+    \item A fixed 90-day label-window sensitivity note, with alternate-window analysis delegated to Stage~3 re-export.
     \item Hyperparameter-tuned model variants with parameter logs.
     \item Visual diagnostics (gains curve, top-feature importance, and lift table outputs).
 \end{itemize}
