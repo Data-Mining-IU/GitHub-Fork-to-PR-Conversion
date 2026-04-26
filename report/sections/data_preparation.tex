@@ -1,78 +1,138 @@
 \section{Data Preparation}
 
-The data preparation phase covers all activities to construct the final dataset for modeling from the initial raw data. 
+The data preparation phase covers all activities to construct the final dataset for modeling from the initial raw data. The implementation materializes two parallel modeling exports (30-day and 90-day label definitions) with the same feature side; the final choice of window for training belongs to the modeling phase, not to this step. Below, each step states \emph{what} is done, \emph{why} it is done, and \emph{what} remains in the data after the step.
 
 \subsection{Select Data}
 
-\subsubsection{Data Selection During Extraction}
+\subsubsection{Data selection during extraction}
 
-Selection during extraction already fixed the GitHub Archive schema: retained fields include repository and actor identifiers, event type and time, repository URL, visibility flag, and derived season; heavy or redundant fields (for example payload and most nested metadata) were excluded at extraction time. Event types used for features and targets include ForkEvent, PullRequestEvent, WatchEvent, PushEvent, IssuesEvent, IssueCommentEvent, and ReleaseEvent, with seasonal windows and repository filters as documented in the earlier report.
+\paragraph{What was already fixed in the warehouse:}
+\begin{itemize}
+  \item \textbf{Schema focus:} the GitHub Archive extract keeps identifiers (repository, actor), event type and time, repository URL, visibility, and a derived \texttt{season} label; large or rarely needed structures (e.g.\ deep payload and most nested metadata) are excluded to limit size and to align rows across tables.
+  \item \textbf{Event types:} the pipeline uses \texttt{ForkEvent} and \texttt{PullRequestEvent} for the conversion target, and \texttt{WatchEvent}, \texttt{PushEvent}, \texttt{IssuesEvent}, \texttt{IssueCommentEvent}, and \texttt{ReleaseEvent} for activity features, with the seasonal windows and repository filters set in the collection phase.
+  \item \textbf{Why:} a narrow, consistent schema reduces noise, keeps joins predictable, and matches the business question (activity and fork-to-PR behaviour within defined horizons).
+\end{itemize}
 
-\subsubsection{Data Selection During EDA}
+\subsubsection{Data selection during EDA and modeling}
 
-The public field exhibits no useful variation in this sample and is removed from the modeling copy of the activity table.
-The \texttt{repo\_url} field is removed from the modeling copy because it is not used as a predictive feature in the current design (it can be rejoined externally if static metadata is added later).
-No repository–season rows are dropped at this step: the sampled keys from BigQuery are preserved; alignment with labels is enforced later with an inner join.
-In code, a copy \texttt{prep\_activity} is built from activity after dropping public and \texttt{repo\_url}, leaving identifiers \texttt{repo\_name} and season plus the five activity counters (watches, pushes, issues, issue comments, releases).
+\paragraph{Columns dropped from the modeling copy of the activity table.}
+\begin{itemize}
+  \item \textbf{\texttt{public}:} no usable variation in this sample, so it does not add signal and is removed to avoid a constant feature.
+  \item \textbf{\texttt{repo\_url}:} not used as a predictive input in the current design; the identifier \texttt{repo\_name} suffices. The URL can be reattached later if static metadata is joined from outside.
+\end{itemize}
 
+\paragraph{What is retained.}
+\begin{itemize}
+  \item \textbf{Keys:} \texttt{repo\_name} and \texttt{season} for every repository--season row from the sample.
+  \item \textbf{Activity counters:} watches, pushes, issues, issue comments, releases (five nonnegative count variables).
+  \item \textbf{Copy used in code:} \texttt{prep\_activity} is the activity table after the drops above, so all subsequent cleaning and feature steps apply to this object only.
+\end{itemize}
+
+\paragraph{Row retention.}
+\begin{itemize}
+  \item No repository--season rows are removed at this step: the keys from the extract are kept.
+  \item Alignment with labels is deferred to a later inner join, so any inconsistency is resolved explicitly rather than by silent row drops here.
+\end{itemize}
 
 \subsection{Clean Data}
 
-Extreme values on activity metrics were documented as legitimate heavy tails rather than automatic data errors. The cleaning strategy is therefore tail reduction, not row deletion.
+\paragraph{Principle.}
+\begin{itemize}
+  \item Activity metrics show heavy tails (very popular repositories). These are treated as legitimate extremes, not as automatic row-level errors, so the strategy is tail reduction, not deletion of outlying repositories.
+  \item Fork and PR event lists used for labels are not winsorized: labeling relies on raw timestamps and user linkage; only tabular activity counts are compressed for modeling stability.
+\end{itemize}
 
-For each of the five activity counters, values are winsorized at the 99th percentile (\texttt{WINSOR\_Q = 0.99}).
-Original columns are retained; capped values are stored in *\_winsor columns.
-Before quantiles and clipping, series are cast to float64 so nullable integer dtypes from Parquet do not conflict with fractional quantile thresholds.
-Fork and PR event lists used for labels are not winsorized; labeling uses raw events and timestamps.
-This balances numerical stability for modeling with preservation of the full sample and of event-level detail for the label logic.
+\paragraph{Winsorization of activity counts.}
+For each of the five activity counters:
+\begin{enumerate}
+  \item Values are cast to \texttt{float64} before quantiles, so nullable integer types from Parquet do not break compatibility with real-valued quantile thresholds.
+  \item The $0.99$ quantile is computed (fixed as \texttt{WINSOR\_Q = 0.99} in the implementation).
+  \item Values above that quantile are capped; capped values are written to \texttt{*\_winsor} columns; original columns are retained unchanged.
+\end{enumerate}
+
+\paragraph{Outcome of cleaning.}
+The modeling pipeline can use either raw or capped scales where appropriate; the full sample and event-level label inputs remain available without arbitrary row loss.
+
 
 \subsection{Construct Data}
 
+\subsubsection{Sampling strategy}
 
-\subsubsection{Sampling Strategy}
-The unit of analysis is one repository in one season. Each row in the integrated table corresponds to that pair. The sample size and inclusion rules follow the extraction query (e.g. the 100,000-row cap and filters applied in the warehouse). This phase does not subsample rows for class balance or stratification; the exported table is the full set of repository–season observations that pass the merge and labeling logic.
+\begin{itemize}
+  \item \textbf{Unit of analysis:} one row = one repository in one season (not a single row aggregated across the whole year for the same repo).
+  \item \textbf{Sample size:} defined upstream (e.g.\ cap and filters in the extract); this phase does not re-subsample for class balance. The tables exported after merge are the full set of keys that pass join and label construction.
+  \item \textbf{Why:} preserves the design of the initial draw and makes train/validation splits in modeling transparent relative to that population.
+\end{itemize}
 
-\subsubsection{Matching Forks to Pull Requests}
+\subsubsection{Matching forks to pull requests (label definition)}
 
-A fork counts as converted if there is at least one pull request whose \texttt{user\_login} matches the fork author, whose timestamp is strictly after the fork, and which occurs within \texttt{OBSERVATION\_DAYS} days after the fork (default 90 in the implementation). Events on or before the fork, or after the window, are ignored for conversion. Per repository and season the notebook computes \texttt{n\_forks}, \texttt{n\_converted\_forks}, \texttt{fork\_conversion\_rate} (converted forks divided by fork count, not total PR events divided by forks without matching), and \texttt{n\_pr\_events} as a count of PR events in the cell.
+\paragraph{Conversion rule (per fork).}
+\begin{itemize}
+  \item A fork \textbf{converts} if there is at least one \texttt{PullRequestEvent} such that: (i) \texttt{user\_login} matches the fork author, (ii) PR time is strictly after the fork time, (iii) PR time falls within a chosen observation window (in calendar days) after the fork.
+  \item PRs on or before the fork, or after the end of the window, do not count toward conversion for that fork.
+\end{itemize}
 
+\paragraph{Two observation windows (not a single default).}
+The implementation sets\\ \texttt{OBSERVATION\_WINDOWS\_DAYS = (30, 90)} and runs the same labeling logic for each value. There is no single default observation length inside the data-preparation code: the notebook builds \texttt{labels\_30d} and \texttt{labels\_90d} and writes
+\texttt{fork\_conversion\_labels\_obs30d} and
+\texttt{fork\_conversion\_labels\_obs90d} (Parquet, or CSV if no Parquet engine is available). Each row includes \texttt{observation\_window\_days} (30 or 90).
 
-\subsubsection{Derived Features}
+\paragraph{Sensitivity of ranks between windows.}
+A separate check compares repository-level\\ \texttt{fork\_conversion\_rate} at 30 and 90~days (Spearman/Kendall correlation, decile reversals, and the share of 90-day conversion events not attributable within 30~days) and prints textual guidance for modeling (which file may be a reasonable first choice). That guidance is for the modeling step only; it does not change the fact that both full modeling tables are produced in Format Data.
 
-For each activity counter, log1p is applied to both the raw values and the winsorized (\texttt{*\_winsor}) versions, giving log1p\_* columns suited to skewed nonnegative counts. Original counts and winsorized columns remain in the table alongside these transforms.
+\paragraph{Aggregates per repository and season.}
+For each \texttt{repo\_name} and \texttt{season}, the construction step records:
+\begin{itemize}
+  \item \texttt{n\_forks} --- number of fork events in the cell;
+  \item \texttt{n\_converted\_forks} --- forks that meet the conversion rule within the chosen window;
+  \item \texttt{fork\_conversion\_rate} = converted forks / fork count (this is not the same as total PR events divided by forks without user--time matching);
+  \item \texttt{n\_pr\_events} --- count of PR events in the list (for diagnostics and scale).
+\end{itemize}
 
-\subsubsection{Generated Records}
+\subsubsection{Derived features (activity side)}
 
-Each generated record is one flat row for a repository–season pair:
+\begin{itemize}
+  \item For each of the five activity variables, log1p is applied to: (a) the raw count, and (b) the winsorized (\texttt{*\_winsor}) value, producing \texttt{log1p\_*} features suited to strong skew and nonnegative support.
+  \item Original levels and \texttt{*\_winsor} columns remain in the table so the analyst can choose scale or run robustness checks later.
+\end{itemize}
 
-Only fork–PR pairs that satisfy the matching rules and fall inside the observation window increase \texttt{n\_converted\_forks} and \texttt{fork\_conversion\_rate}.
-The export stores scalars only; nested fork/PR lists are not written to the flat file.
-Rows are kept when there are no qualifying PRs: \texttt{n\_converted\_forks} may be zero; such rows are not removed from the dataset.
+\subsubsection{Generated records}
 
-
-
-
+\begin{itemize}
+  \item \textbf{Grain:} one flat row per \texttt{repo\_name} and \texttt{season}; nested fork/PR arrays are not written to these flat label files.
+  \item \textbf{Empty PR lists:} rows are kept; conversion can be zero; such observations are not removed.
+  \item \textbf{Only} fork--PR pairs that satisfy the match rules and fall inside the active window update \texttt{n\_converted\_forks} and the rate.
+\end{itemize}
 
 \subsection{Integrate Data}
 
-The activity table (identifiers, activity counters, winsorized and log-transformed fields as built in the preparation pipeline) is joined to the per-repository–season label table on \texttt{repo\_name} and season. The join is an inner merge with one-to-one key validation so each key appears at most once on both sides. The result is a single wide table with one row per repository and season, combining all feature columns with n\_forks, n\_converted\_forks, fork\_conversion\_rate, n\_pr\_events, and any other label fields produced in the construction step.
-
+\paragraph{Join logic.}
+\begin{itemize}
+  \item The prepared activity frame (\texttt{prep\_activity}: identifiers, counts, winsorized and log-transformed fields) is merged with a label table on \texttt{repo\_name} and \texttt{season}.
+  \item The join is an inner merge with a one-to-one key check (\texttt{validate="one\_to\_one"}), and row counts are asserted equal to \texttt{prep\_activity} and the label table. Each key appears at most once on each side and no duplicate fan-out is introduced.
+  \item \textbf{Two integrated frames, not one ``default'':} the code builds \texttt{modeling\_df\_30d} and\\ \texttt{modeling\_df\_90d} by merging to \texttt{labels\_30d} and \texttt{labels\_90d} respectively. Both are present for the same set of keys in the prepared sample; the notebook does not pick a single ``main'' target here---that choice is deferred to the modeling stage when loading
+  \texttt{modeling\_dataset\_obs30d} or
+  \texttt{modeling\_dataset\_obs90d}.
+  \item \textbf{Result (per window):} one wide row per repository and season, combining feature columns with label fields (\texttt{observation\_window\_days}, \texttt{n\_forks}, \texttt{n\_converted\_forks},\\ \texttt{fork\_conversion\_rate}, \texttt{n\_pr\_events}, and related fields from construction).
+\end{itemize}
 
 \subsection{Format Data}
 
-The merged table is ordered and typed for stable export and downstream use.
+\paragraph{Purpose.} Stabilize column order, add convenient identifiers and optional stratification helpers, and export artifacts for the modeling phase.
 
-
+\paragraph{Per-window merge and export pipeline.}
+The export step applies, for each label table, an inner join of \texttt{prep\_activity} to the chosen labels (same key logic as in Integrate Data), then:
 \begin{itemize}
-    \item \texttt{repo\_id}: integer codes for \texttt{repo\_name}; \texttt{repo\_name} is kept for interpretation.
-    \item \texttt{has\_conversion}: binary flag, true when \texttt{n\_converted\_forks > 0}.
-    \item Column order: identifiers and season, then log1p\_* feature columns, then label columns (n\_forks, n\_converted\_forks, fork\_conversion\_rate, n\_pr\_events, has\_conversion), then any remaining columns (e.g. raw counts and \texttt{*\_winsor}).
-    \item Shuffle: rows are permuted with a fixed random seed for reproducibility.
-    \item Output: primary file \texttt{modeling\_dataset.parquet} when a Parquet engine is available; otherwise \texttt{modeling\_dataset.csv}.
+  \item \texttt{repo\_id}: integer code for \texttt{repo\_name} via categorical codes; \texttt{repo\_name} is retained.
+  \item \texttt{has\_conversion}: $1$ if \texttt{n\_converted\_forks} $>0$, else $0$.
+  \item \texttt{activity\_strength}: sum of the five \texttt{log1p\_} features on raw activity counts.
+  \item \texttt{stratum\_activity\_quintile}, \texttt{stratum\_fork\_quintile}: quintile bins (0--4) from \texttt{pd.qcut} on \texttt{activity\_strength} and on \texttt{n\_forks} (\texttt{duplicates="drop"} on degenerate inputs), for optional stratified splits---they need not be used as model features.
+  \item \textbf{Column order} in the exported file: meta (\texttt{repo\_name}, \texttt{repo\_id}, \texttt{season}), then all \texttt{log1p\_*} columns (sorted by name in code), then the stratum block above, then the label block\\ \texttt{observation\_window\_days}, \texttt{n\_forks}, \texttt{n\_converted\_forks}, \texttt{fork\_conversion\_rate},\\ \texttt{n\_pr\_events}, \texttt{has\_conversion}, then remaining columns (raw counts, \texttt{*\_winsor}, etc.).
+  \item \textbf{Shuffle:} the merged table is permuted with \texttt{sample(frac=1.0, random\_state=335)} so the file order is not the extract order, while runs remain reproducible.
 \end{itemize}
 
-The file is row-complete for all keys that survive the inner join; missing-engine fallbacks only affect storage format, not the tabular content.
-
-
-
-
+\paragraph{Output files.}
+\begin{itemize}
+  \item \textbf{Label-only files (one per window):} \texttt{fork\_conversion\_labels\_obs30d} and\\ \texttt{fork\_conversion\_labels\_obs90d} in Parquet or CSV, as written in the construction step.
+  \item \textbf{Full modeling tables (one per window):} \texttt{modeling\_dataset\_obs30d} and\\ \texttt{modeling\_dataset\_obs90d} (Parquet, or \texttt{.csv} with the same stem if no Parquet engine is available). They share the same feature and metadata layout; only the label columns differ. 
+\end{itemize}
