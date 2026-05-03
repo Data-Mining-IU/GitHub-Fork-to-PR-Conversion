@@ -1,0 +1,474 @@
+\section{Modeling}
+
+This phase implements CRISP-DM Stage 4 using the prepared integrated datasets in \texttt{src/data/modeling\_dataset\_obs30d.parquet} and \texttt{src/data/modeling\_dataset\_obs90d.parquet}. The 30-day export is used as the main modeling table, following the Stage~3 sensitivity recommendation, and the 90-day export is used as a label-window robustness check.
+
+\subsection{Select Modeling Technique}
+
+\subsubsection{Modeling Objectives}
+
+Two predictive tasks are modeled:
+\begin{itemize}
+    \item \textbf{Classification:} predict whether a repository-season has at least one converted fork (\texttt{has\_conversion}).
+    \item \textbf{Regression:} predict the conversion intensity (\texttt{fork\_conversion\_rate}).
+\end{itemize}
+
+This dual formulation supports both operational triage (high vs.\ low conversion potential) and continuous forecasting of conversion magnitude.
+
+\subsubsection{Chosen Techniques}
+
+The modeling stage compares baseline and non-baseline methods:
+\begin{itemize}
+    \item \textbf{Naive baselines}
+    \begin{itemize}
+        \item Classification: majority-class predictor.
+        \item Regression: mean conversion-rate predictor.
+    \end{itemize}
+    \item \textbf{Logistic Regression} for interpretable linear decision boundaries under class imbalance.
+    \item \textbf{Random Forest} and \textbf{Extra Trees} for non-linear interactions and robustness on skewed activity signals.
+    \item \textbf{Gradient Boosting} and \textbf{Histogram Gradient Boosting} as additional non-linear ensemble benchmarks for tabular activity data.
+\end{itemize}
+
+\subsection{Generate Test Design}
+
+\subsubsection{Validation Protocol}
+
+\begin{itemize}
+    \item Hold-out split: 80\% training / 20\% test.
+    \item Random seed fixed at 42 for reproducibility.
+    \item Classification split stratified by \texttt{has\_conversion}.
+\end{itemize}
+
+\subsubsection{Feature and Target Setup}
+
+\begin{itemize}
+    \item Input features are restricted to the Stage~3 selected activity features: \texttt{season}, engineered \texttt{log1p\_*} signals, raw activity counts, winsorized activity counts, \texttt{activity\_strength}, and \texttt{stratum\_activity\_quintile}.
+    \item Label-derived counters are not used as predictors. In particular, \texttt{n\_forks}, \texttt{n\_converted\_forks}, \texttt{n\_pr\_events}, and \texttt{stratum\_fork\_quintile} are excluded from the feature matrix.
+    \item Numerical features are median-imputed and scaled for linear models.
+    \item Categorical features are imputed with mode and one-hot encoded.
+\end{itemize}
+
+\subsubsection{Evaluation Metrics}
+
+\paragraph{Classification}
+\begin{itemize}
+    \item Accuracy
+    \item Macro-F1 (primary for imbalance-aware quality)
+    \item Precision
+    \item ROC-AUC (where probability outputs are available)
+\end{itemize}
+
+\paragraph{Regression}
+\begin{itemize}
+    \item Mean Absolute Error (MAE)
+    \item $R^2$
+    \item Predictions are clipped to $[0, 1]$ before evaluation because \texttt{fork\_conversion\_rate} is a bounded rate by construction.
+\end{itemize}
+
+\paragraph{Ranking quality}
+\begin{itemize}
+    \item Precision@10\%
+    \item Lift@10\%
+    \item NDCG@10\%
+\end{itemize}
+
+\subsection{Build Model}
+
+\subsubsection{Implementation}
+
+All models are implemented in \texttt{scikit-learn} pipelines in \texttt{src/Modeling.ipynb}:
+\begin{itemize}
+    \item shared preprocessing through \texttt{ColumnTransformer};
+    \item model fitting on train split only;
+    \item test predictions and metric computation on held-out data.
+\end{itemize}
+
+The following trained models are compared:
+\begin{itemize}
+    \item Classification: baseline, Logistic Regression, Random Forest Classifier, Extra Trees Classifier, Gradient Boosting Classifier, Histogram Gradient Boosting Classifier.
+    \item Regression: baseline mean, Linear Regression, Random Forest Regressor, Extra Trees Regressor, Histogram Gradient Boosting Regressor.
+\end{itemize}
+
+\subsubsection{Hyperparameter Tuning}
+
+Compact hyperparameter tuning is implemented with \texttt{RandomizedSearchCV}:
+\begin{itemize}
+    \item \textbf{Classification:} tuned Random Forest with macro-F1 objective.
+    \item \textbf{Regression:} tuned Random Forest with MAE objective.
+\end{itemize}
+The tuned models are compared to untuned baselines on the held-out test set.
+
+\subsection{Assess Model}
+
+\subsubsection{Assessment Against Success Criteria}
+
+The notebook directly checks whether:
+\begin{itemize}
+    \item Classification models outperform the majority baseline on Macro-F1.
+    \item Regression models reduce MAE versus the mean baseline.
+    \item Regression models achieve non-negative and preferably positive $R^2$ on the test set.
+\end{itemize}
+
+These checks align with the data mining success criteria defined in the business understanding stage.
+
+\paragraph{Classification hold-out metrics (20\% test, random split)}
+\begin{table}[H]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lrrrrr}
+\hline
+Model & Accuracy & Macro-F1 & Precision & Precision@10\% & ROC-AUC \\
+\hline
+\texttt{hist\_gradient\_boosting\_clf} & 0.7863 & 0.7850 & 0.7858 & 0.9475 & 0.8611 \\
+\texttt{gradient\_boosting\_clf} & 0.7835 & 0.7824 & 0.7788 & 0.9490 & 0.8605 \\
+\texttt{random\_forest\_clf\_tuned} & 0.7810 & 0.7802 & 0.7693 & 0.9425 & 0.8552 \\
+\texttt{random\_forest\_clf} & 0.7796 & 0.7789 & 0.7671 & 0.9415 & 0.8532 \\
+\texttt{logistic\_regression} & 0.7764 & 0.7748 & 0.7795 & 0.9305 & 0.8467 \\
+\texttt{extra\_trees\_clf} & 0.7718 & 0.7711 & 0.7575 & 0.9395 & 0.8469 \\
+\texttt{baseline\_majority} & 0.5276 & 0.3454 & 0.0000 & 0.4724 & -- \\
+\hline
+\end{tabular}
+}
+\caption{Classification validation metrics on the 30-day modeling table}
+\label{tab:modeling_classification_metrics}
+\end{table}
+
+The best classifier is \texttt{hist\_gradient\_boosting\_clf}. It improves Macro-F1 by 0.4397 over the majority baseline and nearly doubles the useful top-decile precision relative to the base conversion rate.
+
+\paragraph{Regression hold-out metrics (20\% test, random split)}
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\hline
+Model & MAE & $R^2$ \\
+\hline
+\texttt{hist\_gradient\_boosting\_reg} & 0.1011 & 0.4333 \\
+\texttt{random\_forest\_reg\_tuned} & 0.1016 & 0.4174 \\
+\texttt{random\_forest\_reg} & 0.1023 & 0.4065 \\
+\texttt{extra\_trees\_reg} & 0.1036 & 0.3812 \\
+\texttt{linear\_regression} & 0.1145 & 0.3529 \\
+\texttt{baseline\_mean} & 0.1551 & -0.0001 \\
+\hline
+\end{tabular}
+\caption{Regression validation metrics on the 30-day modeling table}
+\label{tab:modeling_regression_metrics}
+\end{table}
+
+The best regressor is \texttt{hist\_gradient\_boosting\_reg}. Its MAE is lower than the mean baseline by about 0.0540 absolute rate points, and its positive $R^2$ confirms that the model explains meaningful variation beyond the constant-rate predictor.
+
+\subsubsection{Ranking Quality Results}
+
+For the best classification model, repository-seasons are ranked by predicted conversion probability and evaluated in the top decile:
+\begin{itemize}
+    \item Precision@10\% vs random baseline rate.
+    \item Lift@10\% (top-decile precision divided by global positive rate).
+    \item NDCG@10\% for top-ranked quality.
+\end{itemize}
+
+A decile-level lift table and cumulative gains curve are produced in the notebook for stakeholder interpretation.
+
+\paragraph{Observed ranking metrics}
+\begin{table}[H]
+\centering
+\begin{tabular}{lr}
+\hline
+Metric & Value \\
+\hline
+Precision@10\% & 0.9475 \\
+Base conversion rate & 0.4724 \\
+Lift@10\% & 2.0057 \\
+NDCG@10\% & 0.9519 \\
+\hline
+\end{tabular}
+\caption{Ranking summary for the best classifier}
+\label{tab:modeling_ranking_summary}
+\end{table}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{0.92}
+\begin{tabular}{@{}lrrrr@{}}
+\hline
+Dec. & $n$ & Pos. & Prec. & Lift \\
+\hline
+D1 & 2000 & 1895 & 0.9475 & 2.0057 \\
+D2 & 2000 & 1749 & 0.8745 & 1.8512 \\
+D3 & 2000 & 1535 & 0.7675 & 1.6247 \\
+D4 & 2000 & 1334 & 0.6670 & 1.4119 \\
+D5 & 2000 & 1049 & 0.5245 & 1.1103 \\
+D6 & 2000 & 716 & 0.3580 & 0.7578 \\
+D7 & 2000 & 512 & 0.2560 & 0.5419 \\
+D8 & 2000 & 334 & 0.1670 & 0.3535 \\
+D9 & 2000 & 223 & 0.1115 & 0.2360 \\
+D10 & 2000 & 101 & 0.0505 & 0.1069 \\
+\hline
+\end{tabular}
+\caption{Decile lift table for predicted conversion probability}
+\label{tab:modeling_decile_lift}
+\end{table}
+
+\noindent\footnotesize\emph{Column abbreviations:} Dec.\ = decile; $n$ = number of repository-seasons in the decile; Pos.\ = positive count; Prec.\ = precision; Lift = precision divided by the global conversion rate.\normalsize
+
+These metrics show that the model is especially useful as a prioritization tool. The top decile contains converted repository-seasons with 94.75\% precision, while the lower half of the ranking falls to or below the random baseline.
+
+\subsubsection{Actionable Segment Analysis}
+
+The most actionable segment is therefore the \textbf{top-ranked 10\% repository-seasons}. This segment contains 2,000 test observations, 1,895 observed conversions, and a lift of 2.01 over random selection. If the operational goal is to prioritize repositories for maintainer outreach, onboarding guidance, or deeper qualitative review, this top decile is the clearest target group.
+
+The second and third deciles remain useful but weaker: D2 has 87.45\% precision and D3 has 76.75\% precision. After D5 the ranking drops below the global conversion rate, so the lower deciles are not attractive for proactive intervention. This creates a practical segmentation rule: focus first on D1, optionally expand to D2--D3 if capacity allows, and avoid treating the full population as equally promising.
+
+\subsubsection{Validation Stability (Time-Based Folds)}
+
+\textbf{What a ``fold'' means here.} The modeling table is keyed by \texttt{season} with two values (\texttt{winter\_spring} and \texttt{summer\_autumn}). A time-based fold trains on one season and tests on the other. Because there are exactly two seasons, we evaluate \textbf{two folds}:
+\begin{itemize}
+    \item Fold A: train \texttt{winter\_spring} $\rightarrow$ test \texttt{summer\_autumn}
+    \item Fold B: train \texttt{summer\_autumn} $\rightarrow$ test \texttt{winter\_spring}
+\end{itemize}
+
+\textbf{How this maps to the success criterion.} The criterion compares the \textbf{best vs worst fold} for each metric (not random hold-out vs a single temporal split). For higher-is-better metrics we report relative gap $(\text{best}-\text{worst})/\text{best}$; for MAE (lower is better) we report $(\text{worst}-\text{best})/\text{best}$.
+
+\paragraph{Observed fold metrics (best models)}
+\begin{table}[H]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lrrrrrrr}
+\hline
+Fold & Macro-F1 & ROC-AUC & Precision@10\% & Lift@10\% & NDCG@10\% & MAE & $R^2$ \\
+\hline
+Train winter, test summer & 0.7475 & 0.8290 & 0.9229 & 2.0394 & 0.9284 & 0.1037 & 0.2658 \\
+Train summer, test winter & 0.7769 & 0.8684 & 0.9540 & 1.9728 & 0.9567 & 0.1096 & 0.3718 \\
+\hline
+\end{tabular}
+}
+\caption{Time-based fold metrics for classification, ranking, and regression}
+\label{tab:modeling_fold_metrics}
+\end{table}
+
+\paragraph{Best vs worst fold gaps}
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrrl}
+\hline
+Metric & Best fold & Worst fold & Gap, \% & Passes 15\% rule \\
+\hline
+Macro-F1 & 0.7769 & 0.7475 & 3.79 & Yes \\
+ROC-AUC & 0.8684 & 0.8290 & 4.54 & Yes \\
+Precision@10\% & 0.9540 & 0.9229 & 3.25 & Yes \\
+NDCG@10\% & 0.9567 & 0.9284 & 2.96 & Yes \\
+MAE & 0.1037 & 0.1096 & 5.70 & Yes \\
+$R^2$ & 0.3718 & 0.2658 & 28.51 & No \\
+\hline
+\end{tabular}
+\caption{Best-vs-worst seasonal stability gaps}
+\label{tab:modeling_stability_gaps}
+\end{table}
+
+The core classification and ranking metrics pass the 15\% stability rule, and regression MAE also passes it. $R^2$ is less stable in relative terms, but both seasonal folds remain positive, so the regression model still beats the constant baseline in both temporal directions. Training only on \texttt{winter\_spring} and testing on \texttt{summer\_autumn} is a valid \emph{single} temporal evaluation, but it is not sufficient by itself to satisfy the written ``best vs worst fold'' rule; the notebook therefore reports \textbf{both} directions.
+
+\subsubsection{Feature Interpretability}
+
+Interpretability is produced for both target formulations. The notebook reports permutation importance for the best classification model and the best regression model, plus model-native importance scores where the estimator supports them.
+
+\paragraph{Top feature metrics}
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.48\linewidth}rr@{}}
+\hline
+Feature & Mean & Std \\
+\hline
+\texttt{num\_\_log1p\_issue\_comments} & 0.2712 & 0.0037 \\
+\texttt{num\_\_log1p\_watches} & 0.0275 & 0.0010 \\
+\texttt{num\_\_log1p\_pushes} & 0.0257 & 0.0018 \\
+\texttt{num\_\_log1p\_issues} & 0.0143 & 0.0008 \\
+\texttt{cat\_\_season\_summer\_autumn} & 0.0042 & 0.0009 \\
+\hline
+\end{tabular}
+\caption{Top-5 permutation-importance features for classification}
+\label{tab:modeling_top5_classification_features}
+\end{table}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.48\linewidth}rr@{}}
+\hline
+Feature & Mean & Std \\
+\hline
+\texttt{num\_\_log1p\_issue\_comments} & 0.0529 & 0.0006 \\
+\texttt{num\_\_log1p\_watches} & 0.0386 & 0.0007 \\
+\texttt{num\_\_log1p\_pushes} & 0.0124 & 0.0002 \\
+\texttt{num\_\_log1p\_issues} & 0.0083 & 0.0001 \\
+\texttt{num\_\_activity\_strength} & 0.0033 & 0.0001 \\
+\hline
+\end{tabular}
+\caption{Top-5 permutation-importance features for regression}
+\label{tab:modeling_top5_regression_features}
+\end{table}
+
+The same activity pattern dominates both tasks: issue-comment volume is the strongest feature, followed by watches, pushes, and issues. This supports the interpretation that fork-to-PR conversion is more strongly associated with active repository interaction than with isolated release or fork counters.
+
+\paragraph{Local explanations}
+\begin{itemize}
+    \item Top- and bottom-ranked held-out examples are selected from the ranking output.
+    \item If \texttt{shap} is available in the environment, the notebook exports SHAP waterfall plots for those examples and a SHAP decision plot for the top-ranked context sample.
+\end{itemize}
+
+Because \texttt{n\_pr\_events} is no longer a feature, the interpretation focuses on the selected activity signals rather than label-window artifacts.
+
+\subsubsection{Sensitivity Check (30-Day vs 90-Day Observation Windows)}
+
+The modeling notebook evaluates both files with the same selected features and ranking metrics.
+
+\begin{itemize}
+    \item The main model uses \texttt{modeling\_dataset\_obs30d.parquet}.
+    \item The sensitivity check repeats validation on \texttt{modeling\_dataset\_obs90d.parquet}.
+    \item The notebook reports Precision@10\%, ROC-AUC, macro-F1, MAE, and $R^2$ for both windows.
+    \item It also reports label-rank agreement between 30d and 90d conversion rates. Stage~3 observed high rank agreement (Spearman $\approx 0.99$) and only about $3.6\%$ of 90d conversions appearing after day 30.
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lrrrrrrr}
+\hline
+Window & Rows & Positive rate & Macro-F1 & ROC-AUC & Precision@10\% & MAE & $R^2$ \\
+\hline
+30d & 100000 & 0.4724 & 0.7850 & 0.8611 & 0.9475 & 0.1011 & 0.4333 \\
+90d & 100000 & 0.4791 & 0.7770 & 0.8596 & 0.9610 & 0.1024 & 0.4507 \\
+\hline
+\end{tabular}
+}
+\caption{Sensitivity of best model metrics across 30-day and 90-day label windows}
+\label{tab:modeling_window_sensitivity}
+\end{table}
+
+\begin{table}[H]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.68\linewidth}r@{}}
+\hline
+Metric & Value \\
+\hline
+Rows (forks in 30d and 90d windows) & 100000 \\
+Spearman $\rho$, rate ranks 30d vs.\ 90d & 0.9910 \\
+Kendall $\tau$, rate ranks 30d vs.\ 90d & 0.9805 \\
+Top/bottom decile rank reversals & 0 \\
+Share of 90d conversions after day 30 & 0.0358 \\
+Median $\Delta$ rate (90d $-$ 30d) & 0.0000 \\
+\hline
+\end{tabular}
+\caption{Label-window rank stability between 30-day and 90-day conversion rates}
+\label{tab:modeling_label_window_stability}
+\end{table}
+
+\subsubsection{Visual Model Analysis}
+
+The modeling notebook produces visual diagnostics. A subset is exported to report images, while the rest remains notebook-only:
+\begin{itemize}
+    \item Predicted probability histogram for the best classifier (notebook-only).
+    \item Cumulative gains curve for ranking quality (exported to report images).
+    \item Top-5 classification feature importance chart (exported to report images).
+    \item Top-5 regression feature importance chart (exported to report images).
+    \item SHAP waterfall and decision plots when \texttt{shap} is installed.
+    \item Lift table by decile (tabular output in notebook).
+\end{itemize}
+
+\IfFileExists{images/modeling_cumulative_gains.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{modeling_cumulative_gains.png}
+    \caption{Cumulative gains curve for repository conversion ranking}
+    \label{fig:modeling_gains}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_top5_features.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.76\linewidth]{modeling_top5_features.png}
+    \caption{Top-5 permutation-importance features for conversion classification}
+    \label{fig:modeling_top5_features}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_top5_regression_features.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.76\linewidth]{modeling_top5_regression_features.png}
+    \caption{Top-5 permutation-importance features for conversion-rate regression}
+    \label{fig:modeling_top5_regression_features}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_shap_waterfall_top_ranked.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{modeling_shap_waterfall_top_ranked.png}
+    \caption{SHAP waterfall explanation for a top-ranked repository-season}
+    \label{fig:modeling_shap_waterfall_top}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_shap_waterfall_bottom_ranked.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{modeling_shap_waterfall_bottom_ranked.png}
+    \caption{SHAP waterfall explanation for a bottom-ranked repository-season}
+    \label{fig:modeling_shap_waterfall_bottom}
+\end{figure}
+}{}
+
+\IfFileExists{images/modeling_shap_decision_top_bottom_context.png}{
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.78\linewidth]{modeling_shap_decision_top_bottom_context.png}
+    \caption{SHAP decision context for top- and bottom-ranked held-out examples}
+    \label{fig:modeling_shap_decision_context}
+\end{figure}
+}{}
+
+\subsubsection{Practical Interpretation}
+
+\begin{itemize}
+    \item Tree ensembles provide flexible non-linear modeling for heavy-tailed repository activity.
+    \item Logistic/linear models provide a transparent baseline for communication to non-technical stakeholders.
+    \item Baseline comparisons prevent over-claiming improvements in an imbalanced, noisy environment.
+\end{itemize}
+
+\subsubsection{Limitations}
+
+\begin{itemize}
+    \item Time-based validation uses two seasonal folds (both train/test directions). This matches the ``best vs worst fold'' wording, but still provides only two temporal regimes; richer multi-fold checks require exporting additional time slices.
+    \item 30d-vs-90d sensitivity checks label-window robustness, but it does not replace a business decision about which conversion horizon is operationally preferred.
+    \item Target construction remains based on heuristic fork-to-PR matching and may contain residual label noise.
+    \item Extreme conversion ratios in low-fork repositories can still challenge regression stability.
+\end{itemize}
+
+\subsubsection{Hyperparameter Tuning Outcome}
+
+Randomized search is run before final assessment for Random Forest models.
+\begin{itemize}
+    \item Tuned RF \textbf{classification}: optimized with macro-F1 objective.
+    \item Tuned RF \textbf{regression}: optimized with negative MAE objective.
+\end{itemize}
+
+Interpretation:
+\begin{itemize}
+    \item Tuned and untuned variants are both included in the downstream validation tables.
+    \item The selected best model is therefore chosen after, not before, hyperparameter tuning.
+\end{itemize}
+
+\subsubsection{Modeling Stage Deliverables}
+
+\begin{itemize}
+    \item Reproducible notebook: \texttt{src/Modeling.ipynb}.
+    \item Benchmark tables for classification, regression, ranking, time-based stability, and 30d-vs-90d window sensitivity.
+    \item Feature contract that excludes label-derived PR/fork counters from predictors.
+    \item Hyperparameter-tuned model variants with parameter logs.
+    \item Visual diagnostics (gains curve, classification/regression feature importance, SHAP plots where available, and lift table outputs).
+\end{itemize}
