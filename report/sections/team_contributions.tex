@@ -1,0 +1,23 @@
+\section{Team Roles and Contributions}
+
+\begin{table}[H]
+  \centering
+  \renewcommand{\arraystretch}{1.25}
+  \small
+  \begin{tabular}{%
+    >{\raggedright\arraybackslash}p{2.6cm}%
+    >{\raggedright\arraybackslash}p{3.2cm}%
+    >{\raggedright\arraybackslash}p{4.5cm}%
+    >{\raggedright\arraybackslash}p{5.9cm}%
+  }
+    \hline
+    \textbf{Group Member} & \textbf{Assigned Role(s)} & \textbf{Main Responsibilities} & \textbf{Contribution Summary} \\
+    \hline
+    Anna Belyakova & Business Unit & Business Understanding --- formulate objectives, situational inventory, \& data-mining success criteria for the project & Stated the OSS fork-to-PR business problem, stakeholder needs, measurable success criteria (interpretability, pipeline repeatability), and constraints/assumptions that later phases and Evaluation refer back to \\
+    Kira Maslennikova & Business Analyst & Data Understanding --- ensure initial data are described, explored, and checked for quality before modeling & Documented GitHub Archive acquisition and sampling; profiled variables, ran EDA and correlation work, and recorded quality/limitation notes that informed Data Preparation and fork--PR label design \\
+    Sofia Pushkareva & Data Scientist & Data Preparation --- select, clean, construct, \& integrate datasets ready for Modeling tools & Executed Stage~3 select/clean/construct steps (drops, winsorization, log features, strata/strength signals), deterministic fork-to-PR labels across 30- and 90-day windows, and inner joins exporting reproducible parquet tables to Modeling \\
+    Alexandra Starikova-Nasibullina & ML Engineer & Modeling --- choose techniques, specify validation design, build models, and assess vs. baselines & Delivered comparative \texttt{scikit-learn} pipelines from naive baselines to Histogram Gradient Boosting; hold-out and seasonal folds, compact hyperparameter search, ranking metrics plus diagnostic plots feeding the Evaluation stage \\
+    Ilya Grigorev & Project Manager & Evaluation --- benchmark outcomes against Business/Data-Mining objectives; review process; determine next steps & Authored Evaluation: mapped metrics (classification, regression, ranking, temporal stability, SHAP/permutation explanations, label-window sensitivity) to stated success criteria, reviewed pipeline rigor (e.g.,\ fork--PR matching heuristic assumptions), consolidated model choice, reproducibility verdict, deployment-oriented recommendations \\
+    \hline
+  \end{tabular}
+\end{table}
